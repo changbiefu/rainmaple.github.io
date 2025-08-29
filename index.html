@@ -1,9 +1,3 @@
-<script>
-  const url = new URL(location.href);
-  const value = url.searchParams.get(`value`);
-  document.body.innerHTML = document.body.innerHTML.replace(/\$1/g, value);
-</script>
-
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
 
     <!-- Font Awesome 7 -->
@@ -672,6 +666,7 @@
         }
       }
     </style>
+
     <div class="RMPhone" data-initial-index="1">
       <div class="RMPhone-side-buttons">
         <div class="left">
@@ -1105,13 +1100,15 @@ async function ensureFormatSpecEntry() {
 
       /* =============== RMPhoneToChatMessage：自动用 `$1` 初始化、解析、分发、回写 =============== */
       const RMPhoneToChatMessage = (() => {
-        /* ---- 内部状态：初始化就吃 `$1` ---- */
-        let _raw = String(`$1`);
-        let _data = { qq: { accounts: [] } };
+        /* ---- 内部状态：先置空，等待异步初始化 ---- */
+  let _raw = '';
+  let _data = { qq: { accounts: [] } };
+  let _initialized = false;
+  let _initPromise = null;
 
-        /* 依赖检测：等插件把 getChatMessages / setChatMessages 挂到 window */
-        const needFns = ['getChatMessages', 'setChatMessages'];
-        const waitAPI = async (t = 15000) => {
+  /* 依赖检测：等插件把 getChatMessages / setChatMessages 挂到 window */
+  const needFns = ['getChatMessages', 'setChatMessages'];
+  const waitAPI = async (t = 15000) => {
           const ok = () => needFns.every(k => typeof window[k] === 'function');
           if (ok()) return;
           const s = Date.now();
@@ -1368,17 +1365,46 @@ async function ensureFormatSpecEntry() {
           return lines.join('\n');
         }
 
-        /* ---- 初始化：用 `$1` 直接解析到 _data ---- */
-        _data = parseRaw(_raw);
+         /* ---- 新增：异步初始化函数 ---- */
+  async function initialize() {
+    if (_initialized) return;
+    if (_initPromise) return _initPromise; // 如果正在初始化，返回同一个 promise
 
-        /* ---- 对外：给 app 用、更新回写 ---- */
-        function getData() {
-          return _data;
-        }
-        function setData(next) {
-          _data = next || { qq: { accounts: [] } };
-          return _data;
-        }
+    _initPromise = (async () => {
+      await waitAPI();
+      const last = (await window.getChatMessages?.(-1) || [])[0];
+      if (!last || !last.message) {
+        console.warn('RMPhone: No last message found to initialize from.');
+        _initialized = true;
+        return;
+      }
+      
+      // 复用已有的 extractBlock 函数
+      const block = extractBlock(String(last.message));
+      
+      if (block && block.inner) {
+        _raw = block.inner;
+        _data = parseRaw(_raw);
+      } else {
+        console.warn('RMPhone: <RMPhone> block not found in the last message.');
+      }
+      _initialized = true;
+    })();
+    
+    await _initPromise;
+  }
+
+  /* ---- 对外：给 app 用、更新回写 ---- */
+  function getData() {
+    if (!_initialized) console.warn("RMPhoneToChatMessage not initialized. Call .initialize() first.");
+    return _data;
+  }
+  function setData(next) {
+    if (!_initialized) console.warn("RMPhoneToChatMessage not initialized. Call .initialize() first.");
+    _data = next || { qq: { accounts: [] } };
+    return _data;
+  }
+
         function getApp(appName) {
           if (!_data[appName]) _data[appName] = { accounts: [] };
           return _data[appName];
@@ -1429,7 +1455,7 @@ async function ensureFormatSpecEntry() {
           return true;
         }
 
-        return { getData, setData, getApp, setApp, toRaw, RMPhoneCommit, buildRaw, safeParse };
+        return { initialize, getData, setData, getApp, setApp, toRaw, RMPhoneCommit, buildRaw, safeParse };
       })();
 
       /* ===== App 管理器 ===== */
@@ -7002,7 +7028,8 @@ subscribeAnyUnreadExceptLogin,
           }
         }
 
-        mount(viewport) {
+        // --- 1. 将 mount 方法声明为 async ---
+        async mount(viewport) { 
           super.mount(viewport);
 
           this.shadow.innerHTML = `
@@ -7025,18 +7052,20 @@ subscribeAnyUnreadExceptLogin,
       <div id="router" class="qq-router" aria-label="QQ Router"></div>
     `;
 
+
+
+          // --- 2. 在所有逻辑之前，先等待数据模块初始化完成 ---
+          await RMPhoneToChatMessage.initialize();
+
           const router = this.shadow.querySelector('#router');
 
-          // NEW: 先初始化数据（若无账号会建 {{user}}）
           RMQQ.Data.init?.();
           RMQQ.Data.setPersistMode({ mode: 'immediate' });
 
-          // 关键：这里要用 RMQQ.ScreenManager（因为你把类放在 RMQQ 里）
           this._manager = new RMQQ.ScreenManager(router);
 
           this._login = this._detectLogin();
 
-          // 根 Tabs 常驻（不右进）
           const tabs = new RMQQ.TabsView({
             login: this._login,
             onOpenChat: info => this.openChat(info),
