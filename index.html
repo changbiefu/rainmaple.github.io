@@ -1,3 +1,4 @@
+
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
 
     <!-- Font Awesome 7 -->
@@ -34,6 +35,9 @@
       rel="stylesheet"
       href="https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-rounded/css/uicons-solid-rounded.css"
     />
+    <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-regular-straight/css/uicons-regular-straight.css'>
+    <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-straight/css/uicons-solid-straight.css'>
+
 
     <style>
       /* ===================== 基础变量 ===================== */
@@ -629,6 +633,7 @@
       .RMPhone.is-app-open .RMPhone-homebar {
         opacity: 0.85;
         pointer-events: auto;
+        background: rgba(0, 0, 0, 0.85);
       }
 
       .RMPhone-switcher-empty {
@@ -983,9 +988,9 @@ async function ensureQQEmojiStore({ content = EMOJI_DEFAULT } = {}) {
     // 等价于你说的 position: 'at_depth_as_system' + depth:4
     position: { type: 'at_depth', role: 'system', depth: 4, order: 1213 },
     // 兼容两种写法
-    prevent_recursion: true,
-    exclude_recursion: false,
-    recursion: { prevent_incoming: true, prevent_outgoing: false },
+    prevent_recursion: false,
+    exclude_recursion: true,
+    recursion: { prevent_incoming: false, prevent_outgoing: true },
     strategy: {
       type: 'selective',
       keys: ['bqb', '表情包'],
@@ -1100,7 +1105,7 @@ async function ensureFormatSpecEntry() {
 
       /* =============== RMPhoneToChatMessage：自动用 `$1` 初始化、解析、分发、回写 =============== */
       const RMPhoneToChatMessage = (() => {
-        /* ---- 内部状态：先置空，等待异步初始化 ---- */
+  /* ---- 内部状态：先置空，等待异步初始化 ---- */
   let _raw = '';
   let _data = { qq: { accounts: [] } };
   let _initialized = false;
@@ -1109,15 +1114,15 @@ async function ensureFormatSpecEntry() {
   /* 依赖检测：等插件把 getChatMessages / setChatMessages 挂到 window */
   const needFns = ['getChatMessages', 'setChatMessages'];
   const waitAPI = async (t = 15000) => {
-          const ok = () => needFns.every(k => typeof window[k] === 'function');
-          if (ok()) return;
-          const s = Date.now();
-          while (Date.now() - s < t) {
-            await new Promise(r => setTimeout(r, 50));
-            if (ok()) return;
-          }
-          throw new Error('ChatMessage API 未就绪');
-        };
+    const ok = () => needFns.every(k => typeof window[k] === 'function');
+    if (ok()) return;
+    const s = Date.now();
+    while (Date.now() - s < t) {
+      await new Promise(r => setTimeout(r, 50));
+      if (ok()) return;
+    }
+    throw new Error('ChatMessage API 未就绪');
+  };
 
         /* ---- 小工具 ---- */
         const ESC = {
@@ -1317,26 +1322,32 @@ async function ensureFormatSpecEntry() {
 
             // DM/GROUP
             for (const s of acc.sessions || []) {
-              if (!Array.isArray(s.items) || s.items.length === 0) continue;
-              lines.push(s.kind === 'dm' ? `[DM|${s.peer}]` : `[GROUP|${s.peer}]`);
-              for (const it of s.items || []) {
-                const esc = val => {
-                  const sv = String(val ?? '');
-                  return sv.includes('|') || sv.includes(']')
-                    ? `"${sv.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-                    : ESC.escape(sv);
-                };
-                const head = `[${it.type}|${it.speaker}`;
-                const tail =
-                  Array.isArray(it.args) && it.args.length
-                    ? '|' + it.args.map(esc).join('|') + ']'
-                    : it.content
-                    ? '|' + esc(it.content) + ']'
-                    : ']'; // 仅兜底，不再输出 params
-                lines.push(head + tail);
-              }
-              lines.push(s.kind === 'dm' ? `[/DM|${s.peer}]` : `[/GROUP|${s.peer}]`);
-            }
+  const emitBlank = s._blank === true;                     // ★ 新增：是否强制输出空框
+  if ((!Array.isArray(s.items) || s.items.length === 0) && !emitBlank) continue;
+
+  lines.push(s.kind === 'dm' ? `[DM|${s.peer}]` : `[GROUP|${s.peer}]`);
+
+  if (!emitBlank) {                                        // ★ 新增：空框不输出任何消息行
+    for (const it of s.items || []) {
+      const esc = val => {
+        const sv = String(val ?? '');
+        return sv.includes('|') || sv.includes(']')
+          ? `"${sv.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+          : ESC.escape(sv);
+      };
+      const head = `[${it.type}|${it.speaker}`;
+      const tail =
+        Array.isArray(it.args) && it.args.length
+          ? '|' + it.args.map(esc).join('|') + ']'
+          : it.content
+          ? '|' + esc(it.content) + ']'
+          : ']';
+      lines.push(head + tail);
+    }
+  }
+
+  lines.push(s.kind === 'dm' ? `[/DM|${s.peer}]` : `[/GROUP|${s.peer}]`);
+}
 
             // ZONE（若存在）
             if (acc.zone && Array.isArray(acc.zone.items)) {
@@ -1365,42 +1376,54 @@ async function ensureFormatSpecEntry() {
           return lines.join('\n');
         }
 
-         /* ---- 新增：异步初始化函数 ---- */
+        /** 只读取“最新一条”消息中的 <RMPhone> 块 */
   async function initialize() {
     if (_initialized) return;
-    if (_initPromise) return _initPromise; // 如果正在初始化，返回同一个 promise
+    if (_initPromise) return _initPromise;
 
     _initPromise = (async () => {
-      await waitAPI();
-      const last = (await window.getChatMessages?.(-1) || [])[0];
-      if (!last || !last.message) {
-        console.warn('RMPhone: No last message found to initialize from.');
+      try {
+        await waitAPI();
+
+        // 只拿最新一条
+        const last = (await window.getChatMessages?.(-1) || [])[0];
+
+        if (!last || !last.message) {
+          console.warn('RMPhone: 最新消息不存在，使用空数据启动。');
+          _raw = '';
+          _data = { qq: { accounts: [] } };
+          return;
+        }
+
+        // 用你已有的 extractBlock 提取 <RMPhone>…</RMPhone>
+        const block = extractBlock(String(last.message));
+
+        if (block && block.inner) {
+          _raw = block.inner;
+          _data = parseRaw(_raw);
+        } else {
+          console.warn('RMPhone: 最新消息不含 <RMPhone> 块，使用空数据启动。');
+          _raw = '';
+          _data = { qq: { accounts: [] } };
+        }
+      } catch (e) {
+        console.warn('RMPhone.initialize 失败：', e);
+        _raw = '';
+        _data = { qq: { accounts: [] } };
+      } finally {
         _initialized = true;
-        return;
       }
-      
-      // 复用已有的 extractBlock 函数
-      const block = extractBlock(String(last.message));
-      
-      if (block && block.inner) {
-        _raw = block.inner;
-        _data = parseRaw(_raw);
-      } else {
-        console.warn('RMPhone: <RMPhone> block not found in the last message.');
-      }
-      _initialized = true;
     })();
-    
+
     await _initPromise;
   }
 
-  /* ---- 对外：给 app 用、更新回写 ---- */
   function getData() {
-    if (!_initialized) console.warn("RMPhoneToChatMessage not initialized. Call .initialize() first.");
+    if (!_initialized) console.warn('RMPhoneToChatMessage 尚未初始化：请先 await .initialize()');
     return _data;
   }
   function setData(next) {
-    if (!_initialized) console.warn("RMPhoneToChatMessage not initialized. Call .initialize() first.");
+    if (!_initialized) console.warn('RMPhoneToChatMessage 尚未初始化：请先 await .initialize()');
     _data = next || { qq: { accounts: [] } };
     return _data;
   }
@@ -1455,7 +1478,9 @@ async function ensureFormatSpecEntry() {
           return true;
         }
 
-        return { initialize, getData, setData, getApp, setApp, toRaw, RMPhoneCommit, buildRaw, safeParse };
+        return { 
+    initialize, getData, setData, getApp, setApp, toRaw, RMPhoneCommit, buildRaw, safeParse
+  };
       })();
 
       /* ===== App 管理器 ===== */
@@ -1548,13 +1573,22 @@ async function ensureFormatSpecEntry() {
 
           mount() {
             this.buildDots();
-            this.jumpTo(this.INITIAL_INDEX, false);
+
+// 记录默认页，给后面 resize 用
+this._currentIndex = this.INITIAL_INDEX;
+
+// 等一帧，让宽度先定下来，再跳
+requestAnimationFrame(() => this.jumpTo(this.INITIAL_INDEX, false));
+// 兜底：等资源都加载完再稳一次
+window.addEventListener('load', () => this.jumpTo(this.INITIAL_INDEX, false));
             this.bindScrollSnap();
             this.bindDragScroll();
             this.disableImageDrag();
             this.bindAppLaunch();
             this.bindHomebar();
-            window.addEventListener('resize', () => this.snapToNearest());
+            window.addEventListener('resize', () => {
+  this.jumpTo(this._currentIndex ?? this.INITIAL_INDEX, false);
+});
           }
 
           buildDots() {
@@ -1571,6 +1605,7 @@ async function ensureFormatSpecEntry() {
 
           updateDots() {
             const idx = Math.round(this.pages.scrollLeft / this.pages.clientWidth);
+            this._currentIndex = idx; // ← 新增：记住当前页
             this.dots.forEach((d, i) => d.classList.toggle('active', i === idx));
           }
 
@@ -1959,30 +1994,307 @@ async function ensureFormatSpecEntry() {
 
       // ---- Shadow DOM 模板：每个 App 自含样式，不污染外层 ----
       RMPhone.Apps.Settings = class extends RMPhone.Apps.Base {
-        mount(viewport) {
-          super.mount(viewport);
-          this.shadow.innerHTML = `
-        <style>
-          :host{display:block;height:100%}
-          .wrap{position:absolute; inset:0; background:#fff; color:#111; font:14px/1.4 system-ui; display:flex; align-items:center; justify-content:center}
-          .close{ position:absolute; top:12px; right:12px; border:0; cursor:pointer; padding:.25rem .6rem; border-radius:.5rem; background:#f0f0f0; }
-        </style>
-        <div class="wrap">
-          <button class="close">关闭</button>
-          <div>设置 App（示例）</div>
-        </div>`;
-          this._onClose ??= () => RMPhone.toDesktop?.();
-          this.shadow.querySelector('.close')?.addEventListener('click', this._onClose);
-        }
-        unmount() {
-          const btn = this.shadow?.querySelector('.close');
-          if (btn && this._onClose) {
-            btn.removeEventListener('click', this._onClose);
-          }
-          this._onClose = null; // 推荐：把引用也置空
-          super.unmount();
-        }
-      };
+  constructor(el) {
+    super(el);
+    this.state = {
+      ratio: '37/76',
+      bksx: 284,
+      wallpaper: '',
+      font: {
+        cssURL: 'https://fontsapi.zeoseven.com/69/main/result.css',
+        family: 'Noto Sans CJK', // 思源黑体
+        feature: '"hwid"',
+      },
+    };
+    this._handlers = {};
+  }
+
+  /* ================= 应用到外层页面（即时生效） ================= */
+  _applyAspect(ratio) {
+    if (!ratio) return;
+    document.documentElement.style.setProperty('--aspect-ratio', String(ratio));
+  }
+  _applyHue(h) {
+    const hue = Math.max(0, Math.min(360, Number(h || 0)));
+    document.documentElement.style.setProperty('--bksx', String(hue));
+  }
+  _applyWallpaper(url) {
+    const bg = document.querySelector('.RMPhone-bg');
+    if (bg && url) bg.style.backgroundImage = `url('${url}')`;
+  }
+
+  async _ensureFontInfra() {
+    const head = document.head || document.getElementsByTagName('head')[0];
+    let link = head.querySelector('#rmphone-font-link');
+    if (!link) {
+      link = document.createElement('link');
+      link.id = 'rmphone-font-link';
+      link.rel = 'stylesheet';
+      head.appendChild(link);
+    }
+    let style = head.querySelector('#rmphone-font-override');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'rmphone-font-override';
+      style.textContent = `
+        :root{ --rmphone-font-family: Inter; --rmphone-font-feature: "hwid"; }
+      `;
+      head.appendChild(style);
+    }
+    return { link, style };
+  }
+  async _applyFont(fontCfg = {}) {
+    const { cssURL, family, feature } = fontCfg || {};
+    const { link } = await this._ensureFontInfra();
+    if (cssURL) link.href = cssURL;
+    const fam = family || 'Noto Sans CJK';
+    const feat = feature || '"hwid"';
+    document.documentElement.style.setProperty('--rmphone-font-family', fam);
+    document.documentElement.style.setProperty('--rmphone-font-feature', feat);
+  }
+
+  async _saveGlobal(patch) {
+    try { await RMPhoneToWorldBook.saveGlobal?.(patch); } catch(e) { console.warn('saveGlobal failed:', e); }
+  }
+
+  /* ================== 生命周期：mount / unmount ================== */
+  async mount(viewport) {
+    super.mount(viewport);
+
+    // 模板：顶部栏沿用 ChatView 风格；设置项上下排版
+    this.shadow.innerHTML = `
+<link rel="stylesheet" href="https://cdn-uicons.flaticon.com/3.0.0/uicons-regular-rounded/css/uicons-regular-rounded.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+<style>
+  :host{ display:block; height:100%; }
+  .set-wrap{
+    --accent:#0099ff; --bg:#f2f4f7; --line:#e8ecf2; --topbot-alpha:.82; --island-clearance:10%;
+    position:absolute; inset:0; display:flex; flex-direction:column; background:var(--bg); color:#111;
+    font: 13px/1.35 var(--rmphone-font-family, Inter), system-ui, -apple-system, "Segoe UI", Arial;
+    font-feature-settings: var(--rmphone-font-feature, "hwid");
+  }
+  .set-wrap *{ -webkit-tap-highlight-color: transparent; }
+
+  /* 顶部栏（沿用 ChatView 方案） */
+  .chat-topbar{ position:sticky; top:0; z-index:5; background:rgba(242,244,247,var(--topbot-alpha)); backdrop-filter:saturate(160%) blur(10px); border-bottom:1px solid var(--line); padding: calc(env(safe-area-inset-top, 0px) + var(--island-clearance)) 8px 6px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .chat-left{ display:flex; align-items:center; min-width:0; }
+  .chat-back{ width:28px; height:28px; border:0; background:transparent; border-radius:8px; display:grid; place-items:center; flex:0 0 auto; cursor:pointer; }
+  .chat-back i{ font-size:16px; transform:translateX(-0.2em); }
+  .chat-center{ display:flex; flex-direction:column; min-width:0; }
+  .chat-name{ font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chat-status{ font-size:10.5px; color:#6b7280; }
+  .chat-right{ display:flex; align-items:center; }
+
+  /* 内容区 */
+  .main{ flex:1; overflow:auto; padding:10px 10px 14px; -ms-overflow-style: none; scrollbar-width: none; }
+  .main::-webkit-scrollbar{ display: none; }
+  .card{ background:#fff; border:1px solid #eef1f5; border-radius:14px; padding:10px 10px; margin:0 0 12px; box-shadow:0 1px 0 rgba(17,24,39,0.02); }
+  .row{ display:flex; flex-direction:column; gap:10px; padding:8px 6px; }
+  .label{ font-size:12px; color:#6b7280; }
+  .field{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .ipt{ flex:1; min-width:0; height:34px; border:1px solid #e5e7eb; border-radius:10px; padding:0 10px; background:#fff; color:#111; outline:none; }
+  .btn{ height:30px; padding:0 10px; border:0; border-radius:8px; background:#2b84ff; color:#fff; cursor:pointer; }
+  .btn.mini{ height:28px; }
+  .hint{ font-size:12px; color:#888; }
+  .swatch{ width:18px; height:18px; border-radius:4px; border:1px solid #e5e7eb; }
+  input[type="range"]{ flex:1; }
+
+  .radios{ display:flex; gap:10px; flex-wrap:wrap; }
+  .radio{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #e5e7eb; border-radius:999px; cursor:pointer; }
+  .radio input{ accent-color:#2b84ff; }
+
+  @media (max-width:420px){ .row{ padding:10px 8px; } }
+</style>
+
+<div class="set-wrap" role="application" aria-label="设置">
+  <!-- 顶部栏（ChatView样式） -->
+  <header class="chat-topbar">
+    <div class="chat-left">
+      <button class="chat-back" id="btnBack" aria-label="返回"><i class="fa-solid fa-angle-left"></i></button>
+      <div class="chat-center">
+        <div class="chat-name">设置</div>
+        <div class="chat-status">暂用</div>
+      </div>
+    </div>
+    <div class="chat-right"></div>
+  </header>
+
+  <!-- 内容：全部改为“标题在上，控件在下”的上下排版 -->
+  <main class="main">
+    <!-- 手机比例 -->
+    <section class="card">
+      <div class="row">
+        <div class="label">手机比例</div>
+        <div class="field">
+          <input id="ratioIpt" class="ipt" type="text" inputmode="text" placeholder="例如 37/76 或 9/19" />
+          <button id="ratioApply" class="btn mini">应用</button>
+          <div class="hint">格式：宽/高，例如 37/76</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 边框色相 -->
+    <section class="card">
+      <div class="row">
+        <div class="label">边框色相</div>
+        <div class="field">
+          <input id="hueRange" type="range" min="0" max="360" step="1" aria-label="边框色相" />
+          <div id="hueSwatch" class="swatch" aria-hidden="true"></div>
+          <div id="hueVal" class="hint"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 壁纸 -->
+    <section class="card">
+      <div class="row">
+        <div class="label">手机壁纸</div>
+        <div class="field">
+          <input id="wpIpt" class="ipt" type="url" placeholder="输入图片 URL" />
+          <button id="wpApply" class="btn mini">应用</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 字体（默认思源；并持久化） -->
+    <section class="card" role="group" aria-label="手机字体">
+      <div class="row">
+        <div class="label">手机字体</div>
+        <div class="field radios">
+          <label class="radio"><input type="radio" name="font" value="noto">思源黑体</label>
+          <label class="radio"><input type="radio" name="font" value="chill">寒蝉圆黑体</label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label">自定义</div>
+        <div class="field">
+          <input id="fontUrl" class="ipt" type="url" placeholder="字体 CSS 的 URL（@import 所指向）" />
+          <input id="fontFamily" class="ipt" type="text" placeholder="font-family 名称" />
+          <button id="fontApply" class="btn mini">应用字体</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"></div>
+        <div class="field"><div class="hint">默认：思源黑体（Noto Sans CJK）。切换后会保存到世界书“RMPhone手机设置”。</div></div>
+      </div>
+    </section>
+  </main>
+</div>`;
+
+    /* ====== 初始化：读 worldbook 全局并应用 / 回填 ====== */
+    try {
+      const all = await RMPhoneToWorldBook.getAll?.();
+      const g = (all && all.global) || {};
+      if (g.aspectRatio) this.state.ratio = String(g.aspectRatio);
+      if (g.bksx != null) this.state.bksx = Number(g.bksx);
+      if (g.wallpaper) this.state.wallpaper = String(g.wallpaper);
+      if (g.font && (g.font.cssURL || g.font.family)) this.state.font = { feature: '"hwid"', ...g.font };
+    } catch (e) {
+      console.warn('getAll failed, use defaults', e);
+    }
+
+    // 应用到页面
+    this._applyAspect(this.state.ratio);
+    this._applyHue(this.state.bksx);
+    if (this.state.wallpaper) this._applyWallpaper(this.state.wallpaper);
+    await this._applyFont(this.state.font);
+
+    // 回填输入框
+    const $ = s => this.shadow.querySelector(s);
+    $('#ratioIpt').value = this.state.ratio || '';
+    $('#hueRange').value = String(this.state.bksx);
+    $('#hueSwatch').style.background = `hsl(${this.state.bksx}, 80%, 50%)`;
+    $('#hueVal').textContent = String(this.state.bksx);
+    $('#wpIpt').value = this.state.wallpaper || '';
+
+    // 字体单选回填
+    const chosen = (this.state.font.family || '').toLowerCase();
+    const radioVal = chosen.includes('chill') ? 'chill' : (chosen.includes('noto') ? 'noto' : '');
+    if (radioVal) this.shadow.querySelector(`input[name="font"][value="${radioVal}"]`)?.setAttribute('checked','checked');
+
+    /* ================= 事件绑定 ================= */
+    this._handlers.onBack = () => RMPhone.toDesktop?.();
+
+    this._handlers.onApplyRatio = async () => {
+      const v = ($('#ratioIpt').value || '').trim();
+      if (!v) return;
+      this.state.ratio = v;
+      this._applyAspect(v);
+      await this._saveGlobal({ aspectRatio: v });
+    };
+
+    this._handlers.onHueInput = e => {
+      const v = Number(e.target.value || 0);
+      this.state.bksx = v;
+      this._applyHue(v);
+      $('#hueSwatch').style.background = `hsl(${v}, 80%, 50%)`;
+      $('#hueVal').textContent = String(v);
+    };
+    this._handlers.onHueChange = async () => {
+      await this._saveGlobal({ bksx: this.state.bksx });
+    };
+
+    this._handlers.onApplyWp = async () => {
+      const url = ($('#wpIpt').value || '').trim();
+      if (!url) return;
+      this.state.wallpaper = url;
+      this._applyWallpaper(url);
+      await this._saveGlobal({ wallpaper: url });
+    };
+
+    this._handlers.onFontRadio = async e => {
+      const v = e.target.value;
+      let next = null;
+      if (v === 'noto') {
+        next = { cssURL: 'https://fontsapi.zeoseven.com/69/main/result.css', family: 'Noto Sans CJK', feature: '"hwid"' };
+      } else if (v === 'chill') {
+        next = { cssURL: 'https://fontsapi.zeoseven.com/83/main/result.css', family: 'Chill Round Gothic', feature: 'normal' };
+      }
+      if (next) {
+        this.state.font = next;
+        await this._applyFont(next);
+        await this._saveGlobal({ font: next });
+      }
+    };
+
+    this._handlers.onApplyFont = async () => {
+      const cssURL = ($('#fontUrl').value || '').trim();
+      const family = ($('#fontFamily').value || '').trim();
+      if (!cssURL || !family) return;
+      const next = { cssURL, family, feature: '"hwid"' };
+      this.state.font = next;
+      await this._applyFont(next);
+      await this._saveGlobal({ font: next });
+    };
+
+    // 监听
+    this.shadow.getElementById('btnBack')?.addEventListener('click', this._handlers.onBack);
+    this.shadow.getElementById('ratioApply')?.addEventListener('click', this._handlers.onApplyRatio);
+    this.shadow.getElementById('hueRange')?.addEventListener('input', this._handlers.onHueInput);
+    this.shadow.getElementById('hueRange')?.addEventListener('change', this._handlers.onHueChange);
+    this.shadow.getElementById('wpApply')?.addEventListener('click', this._handlers.onApplyWp);
+    this.shadow.querySelectorAll('input[name="font"]').forEach(r => r.addEventListener('change', this._handlers.onFontRadio));
+    this.shadow.getElementById('fontApply')?.addEventListener('click', this._handlers.onApplyFont);
+  }
+
+  unmount() {
+    try {
+      const root = this.shadow?.root || this.shadow;
+      if (root) {
+        root.getElementById?.('btnBack')?.removeEventListener('click', this._handlers.onBack);
+        root.getElementById?.('ratioApply')?.removeEventListener('click', this._handlers.onApplyRatio);
+        root.getElementById?.('hueRange')?.removeEventListener('input', this._handlers.onHueInput);
+        root.getElementById?.('hueRange')?.removeEventListener('change', this._handlers.onHueChange);
+        root.getElementById?.('wpApply')?.removeEventListener('click', this._handlers.onApplyWp);
+        root.querySelectorAll?.('input[name="font"]').forEach(r => r.removeEventListener('change', this._handlers.onFontRadio));
+        root.getElementById?.('fontApply')?.removeEventListener('click', this._handlers.onApplyFont);
+      }
+    } catch {}
+    this._handlers = {};
+    super.unmount();
+  }
+};
+
 
       // ===== QQ App（重构版：迷你路由 + 屏幕协议 + 保留原样式/交互） =====
       /**
@@ -2662,9 +2974,15 @@ async function ensureFormatSpecEntry() {
       </div>
 
       <div class="drawer-bottom">
-        <div class="mini"><i class="fi fi-tc-settings"></i><span>设置</span></div>
+        <div class="mini" id="btnSettings" role="button" tabindex="0"><i class="fi fi-tc-settings"></i><span>设置</span></div>
         <div class="mini"><i class="fi fi-tc-moon"></i><span>夜间</span></div>
         <div class="mini"><i class="fi fi-tr-cloud-sun"></i><span>天气</span></div>
+        <div class="qa-menu" id="setMenu" role="menu" aria-hidden="true"
+     style="left:6px;right:auto;top:auto;bottom:58px;transform-origin:bottom left;">
+  <button class="qa-item" id="btnLogout" aria-label="注销账号">
+    <i class="fi fi-rr-exit"></i><span>注销账号</span>
+  </button>
+</div>
       </div>
     </div>
     <!-- 添加账号弹窗 -->
@@ -2683,6 +3001,28 @@ async function ensureFormatSpecEntry() {
     <div class="qq-actions">
       <button class="qq-btn" id="accAddCancel">取消</button>
       <button class="qq-btn primary" id="accAddOK">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑我的头像弹窗 -->
+<div class="qq-modal-mask" id="dlgEditSelfAvatar" aria-hidden="true">
+  <div class="qq-modal" role="dialog" aria-label="编辑我的头像">
+    <div class="title">编辑我的头像</div>
+    <div class="qq-field">
+      <label>头像 URL</label>
+      <input id="selfAvatarUrl" placeholder="https://..." />
+    </div>
+    <div class="qq-field">
+      <label>预览</label>
+      <div id="selfAvatarPreview"
+           style="width:56px;height:56px;border-radius:50%;
+                  background:#eef1f5 center/cover no-repeat;"></div>
+    </div>
+    <div class="qq-error" id="selfAvatarErr"></div>
+    <div class="qq-actions">
+      <button class="qq-btn" id="selfAvatarCancel">取消</button>
+      <button class="qq-btn primary" id="selfAvatarOK">确认</button>
     </div>
   </div>
 </div>
@@ -2894,7 +3234,7 @@ async function ensureFormatSpecEntry() {
             const $ = s => this.root.querySelector(s);
             const $$ = s => Array.from(this.root.querySelectorAll(s));
             // NEW: 用当前登录名覆盖界面里的占位名
-            const loginName = this.login && String(this.login).trim() ? this.login.trim() : '{{user}}';
+            const loginName = this.login && String(this.login).trim() ? this.login.trim() : '游客';
 
             // 消息页顶栏用户名
             const chatTopName = this.root.querySelector('.page--chats .topbar .top-left .uinfo .name');
@@ -3081,7 +3421,85 @@ async function ensureFormatSpecEntry() {
             drawer.addEventListener('pointercancel', endDrag);
             drawer.addEventListener('lostpointercapture', endDrag);
 
-            avatar.addEventListener('click', openDrawer);
+            // —— 新增：编辑“我的头像”——
+const dlgSelf  = this.root.querySelector('#dlgEditSelfAvatar');
+const iptSelf  = this.root.querySelector('#selfAvatarUrl');
+const prevSelf = this.root.querySelector('#selfAvatarPreview');
+const errSelf  = this.root.querySelector('#selfAvatarErr');
+const okSelf   = this.root.querySelector('#selfAvatarOK');
+const cancelSelf = this.root.querySelector('#selfAvatarCancel');
+
+const showMask = el => { el?.classList.add('show');  el?.setAttribute('aria-hidden','false'); };
+const hideMask = el => { el?.classList.remove('show');el?.setAttribute('aria-hidden','true'); };
+
+const openSelfAvatarDialog = async () => {
+  if (!dlgSelf) return;
+  if (errSelf) errSelf.textContent = '';
+
+  // 读当前登录人的头像（世界书：RMPhone手机设置 -> qq.login[this.login].avatar）
+  let url = '';
+  try {
+    const wb = await RMPhoneToWorldBook.getApp('qq');
+    url = wb?.login?.[this.login]?.avatar || '';
+  } catch {}
+  if (iptSelf)  iptSelf.value = url;
+  if (prevSelf) prevSelf.style.backgroundImage = url ? `url('${url}')` : 'none';
+  showMask(dlgSelf);
+};
+
+// 输入时联动预览
+iptSelf?.addEventListener('input', () => {
+  const u = (iptSelf.value || '').trim();
+  if (prevSelf) prevSelf.style.backgroundImage = u ? `url('${u}')` : 'none';
+});
+
+// 取消
+cancelSelf?.addEventListener('click', () => hideMask(dlgSelf));
+
+// 确认：保存到世界书“RMPhone手机设置”的 qq.login[登录人].avatar，并刷新 TabsView 里所有“登录人头像”
+okSelf?.addEventListener('click', async () => {
+  const u = (iptSelf?.value || '').trim();
+  if (!u) { if (errSelf) errSelf.textContent = '请输入头像 URL'; return; }
+  try {
+    // 1) 写世界书（RMPhone手机设置）
+    const wb = (await RMPhoneToWorldBook.getApp('qq').catch(() => ({}))) || {};
+    wb.login ||= {};
+    wb.login[this.login] ||= { avatar: u, contacts: { friends: {}, groups: {} } };
+    wb.login[this.login].avatar = u;
+    await RMPhoneToWorldBook.saveApp('qq', wb);
+
+    // 2) 局部刷新：更新抽屉头像、顶栏头像（TabsView 的几个地方）
+    const setAva = sel => {
+      const el = this.root.querySelector(sel);
+      if (el) {
+        el.style.backgroundImage = `url('${u}')`;
+        el.style.backgroundSize = 'cover';
+        el.style.backgroundPosition = 'center';
+      }
+    };
+    setAva('#avatar');                      // 抽屉卡片头像
+    setAva('#tbarAvatar');                  // 聊天页顶栏头像
+    setAva('.page--contacts .topbar .avatar');
+    setAva('.page--feed .topbar .avatar');
+
+    // 3) 更新内存里的头像字典（有就改，没有也不影响）
+    try { this._avatarMap?.set(`${this.login}|__self__`, u); } catch {}
+
+    // 4) 通知其它视图（比如 ChatView）有需要时可监听这个事件做更新（可选）
+    window.dispatchEvent(new CustomEvent('rmqq:self-avatar-updated', {
+      detail: { login: this.login, url: u }
+    }));
+
+    hideMask(dlgSelf);
+  } catch {
+    if (errSelf) errSelf.textContent = '保存失败，请重试';
+  }
+});
+
+// 暴露给下面用
+this.openSelfAvatarDialog = openSelfAvatarDialog;
+
+            avatar.addEventListener('click', openSelfAvatarDialog);
             tbarAvatar?.addEventListener('click', openDrawer);
             this.root.querySelector('.page--contacts .topbar .avatar')?.addEventListener('click', openDrawer);
             this.root.querySelector('.page--feed .topbar .avatar')?.addEventListener('click', openDrawer);
@@ -3196,7 +3614,7 @@ async function ensureFormatSpecEntry() {
                     } else {
                       li.querySelector('.row2').textContent = e.summary.preview || '';
                       const t = li.querySelector('.time');
-                      if (t) t.textContent = '刚刚';
+                      if (t) setTimeFromLastTimeMsg(li, e.summary.kind, e.summary.peer);
                     }
                     setUnreadCount(li, (e.summary && e.summary.unreadCount) || 0);
                     this.root.__rmqq?.refreshTabBadge?.();
@@ -3423,8 +3841,87 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
                 refreshFromWB: async () => {
                   await renderAccList();
                 },
+                 switchLogin, // 把内部的切换函数暴露出去
               };
             })();
+
+            // —— 设置（左下角）小菜单 + 注销账号 —— //
+(() => {
+  const btnSettings = this.root.querySelector('#btnSettings');
+  const setMenu = this.root.querySelector('#setMenu');
+  const btnLogout = this.root.querySelector('#btnLogout');
+  const drawerScroll = this.root.querySelector('.drawer-scroll');
+
+  const showSet = e => {
+    e?.stopPropagation?.();
+    setMenu.classList.add('show');
+    setMenu.setAttribute('aria-hidden','false');
+    // 点击外面就关闭
+    this.root.addEventListener('pointerdown', onOutside, true);
+    // 滚动抽屉也关闭
+    drawerScroll?.addEventListener('scroll', hideSet, { passive:true, once:true });
+  };
+  const hideSet = () => {
+    setMenu.classList.remove('show');
+    setMenu.setAttribute('aria-hidden','true');
+    this.root.removeEventListener('pointerdown', onOutside, true);
+  };
+  const onOutside = e => {
+    if (setMenu.contains(e.target)) return;
+    if (btnSettings.contains(e.target)) return;
+    hideSet();
+  };
+  const onToggle = e => {
+    setMenu.classList.contains('show') ? hideSet() : void showSet(e);
+  };
+
+  btnSettings?.addEventListener('click', onToggle);
+  btnSettings?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') onToggle(e);
+  });
+
+  // 注销当前账号：删 _data 里的该账号 + 删世界书“RMPhone手机设置”里 qq.login[login]
+  const doLogout = async () => {
+    try {
+      const login = this.login || '';
+      if (!login) return;
+
+      // 1) _data：从 ChatMessage 的 qq.accounts 里移除这个账号
+      const app = RMPhoneToChatMessage.getApp('qq') || (RMPhoneToChatMessage.apps.qq = { accounts: [] });
+      if (Array.isArray(app.accounts)) {
+        const i = app.accounts.findIndex(a => a && a.login === login);
+        if (i >= 0) app.accounts.splice(i, 1);
+      }
+      // 触发一次保存（如果 Data.commit 可用）
+      try { await RMQQ?.Data?.commit?.({ immediate: true }); } catch {}
+
+      // 2) 世界书（“RMPhone手机设置”条目里的 qq 应用节点）
+      try {
+        const wb = (await RMPhoneToWorldBook.getApp('qq').catch(() => ({}))) || {};
+        if (wb.login && wb.login[login]) {
+          delete wb.login[login];
+          await RMPhoneToWorldBook.saveApp('qq', wb);
+        }
+      } catch {}
+
+      hideSet();
+
+              // 3) 如果还有其它账号，就切过去；没有就回登录页
+       const cmNext = RMPhoneToChatMessage.getApp('qq')?.accounts?.find(a => a?.login && a.login !== login)?.login || null;
+       let wbNext = null; try { const wb2 = (await RMPhoneToWorldBook.getApp('qq').catch(()=>({}))) || {}; const keys = Object.keys(wb2.login||{}).filter(x => x !== login); wbNext = keys[0] || null; } catch {}
+       const next = cmNext || wbNext;
+if (next) {
+  // 用弹窗那套“真·切换”逻辑，保证头像/名字都刷新
+  await this._accSwitch?.switchLogin?.(next);
+} else {
+  this.onLoginChanged?.(null);
+}
+
+    } catch {}
+  };
+
+  btnLogout?.addEventListener('click', doLogout);
+})();
 
             // 红点位置
             const tabBadge = $('#tabBadge');
@@ -3666,9 +4163,12 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
                     setTimeout(() => {
                       suppressNextClick = false;
                     }, 260);
-                  } else {
-                    closeWithAnim();
-                  }
+                      } else {
+      closeWithAnim();
+      // 新增：收回去时也屏蔽下一次点击，避免误入聊天
+      suppressNextClick = true;
+      setTimeout(() => { suppressNextClick = false; }, 260);
+    }
                 }
               };
 
@@ -4193,7 +4693,7 @@ if (nowUnread) {
               const patch = { login: {} };
 
               const accounts = Array.isArray(state.accounts) ? state.accounts : [];
-              const fallbackLogin = (loginName && String(loginName).trim()) || '{{user}}';
+              const fallbackLogin = (loginName && String(loginName).trim()) || '游客';
 
               if (!accounts.length) {
                 // 没账号也给一个兜底节点，避免 login:{}
@@ -4341,6 +4841,22 @@ if (nowUnread) {
               return li;
             };
 
+                          // 根据“最近一条 [time]”设置列表里的时间文本
+              const setTimeFromLastTimeMsg = (li, kind, peer) => {
+                try {
+                  const sess = RMQQ.Data.findSession?.(this.login, kind, peer);
+                  const arr = Array.isArray(sess?.items) ? sess.items : [];
+                  for (let i = arr.length - 1; i >= 0; i--) {
+                    const it = arr[i];
+                    if (it && it.type === 'time') {
+                      const v = String((Array.isArray(it.args) && it.args[0]) || it.content || '');
+                      li.querySelector('.time').textContent = v;
+                      return;
+                    }
+                  }
+                } catch {}
+              };
+
             this._unsubTabs = RMQQ.Data.subscribeTabsSummaries({ login: this.login }, e => {
               const ul = this.root.querySelector('.page--chats #chatList');
               if (!ul) return;
@@ -4351,6 +4867,7 @@ if (nowUnread) {
                 for (const s of e.summaries) {
                   const li = makeChatRow(s.peer, s.kind, s.preview || (s.kind === 'group' ? '群聊' : '好友'));
                   ul.appendChild(li);
+                  setTimeFromLastTimeMsg(li, s.kind, s.peer);
                   setUnreadCount(li, s.unreadCount || 0);
                 }
 
@@ -4436,7 +4953,7 @@ if (nowUnread) {
                   // 更新预览与时间
                   li.querySelector('.row2').textContent = e.summary.preview || '';
                   const t = li.querySelector('.time');
-                  if (t) t.textContent = '刚刚';
+                  if (t) setTimeFromLastTimeMsg(li, e.summary.kind, e.summary.peer);
                 }
                 setUnreadCount(li, (e.summary && e.summary.unreadCount) || 0);
 
@@ -4702,9 +5219,9 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
         .cv-txt{
           --fz:13px; --lh:1.35; --vpad:8px;
           max-width:76%;
-          padding: var(--vpad) 10px;
+          padding: calc(var(--vpad) * var(--cv-msg-scale,1)) 10px;
           line-height: var(--lh);
-          font-size: var(--fz);
+          font-size: calc(var(--fz) * var(--cv-msg-scale,1));
           border-radius:12px;
           word-break:break-word;
         }
@@ -4715,8 +5232,8 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
 .cv-wrap{ display:flex; flex-direction:column; align-items:flex-start; max-width:100%; flex:1 1 auto; min-width:0; }
 
         .chat-ava{
-          width:  calc(2*var(--vpad,8px) + var(--fz,13px)*var(--lh,1.35));
-          height: calc(2*var(--vpad,8px) + var(--fz,13px)*var(--lh,1.35));
+          width: calc((2*var(--vpad,8px) + var(--fz,13px)*var(--lh,1.35)) * var(--cv-ava-scale,1));
+height: calc((2*var(--vpad,8px) + var(--fz,13px)*var(--lh,1.35)) * var(--cv-ava-scale,1));
           border-radius:999px; flex:0 0 auto;
           background:#dfe3ea center/cover no-repeat;
         }
@@ -4782,7 +5299,7 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
   border-radius:12px;
   padding:10px 10px 10px 12px;
   max-width:76%;
-  width: clamp(220px, 70%, 360px);
+  width: clamp(200px, 66%, 320px);
   box-sizing:border-box;
   user-select:none; cursor:pointer;
 }
@@ -4807,8 +5324,70 @@ this._offOtherUnread = RMQQ.Data.subscribeAnyUnreadExceptLogin?.(
 }
 .cv-file-ico i{ color:#fff; font-size:20px; line-height:1; }
 
+/* ===== xfr（转账卡片） ===== */
+.cv-xfr{
+  background:#fff; border:1px solid #eef1f5; border-radius:12px; overflow:hidden;
+  width:clamp(200px,66%,320px); max-width:76%;
+  user-select:none; cursor:pointer;
+}
+.cv-xfr:active{ transform:scale(.995); }
+
+.cv-xfr .xfr-top{
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px;                     /* ↓ 从 10px 改为 8px */
+  background:#2b84ff; color:#fff;
+}
+.cv-xfr .xfr-ico{
+  width:auto; height:auto; border:0; border-radius:0;
+  display:grid; place-items:center;
+}
+.cv-xfr .xfr-ico i{
+  color:#fff; font-size:26px; line-height:1; transform: translateY(2px);  /* 放大一点 */
+}
+
+.cv-xfr .xfr-txt{ flex:1; min-width:0; }
+.cv-xfr .line1{
+  display:flex; align-items:baseline; gap:4px;   /* 控制间距与基线 */
+  line-height:1.15;
+  font-size:16px; letter-spacing:.2px;
+}
+.cv-xfr .line1 .yen{ opacity:.95; }
+.cv-xfr .line2{ font-size:10px; opacity:.95; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-xfr .xfr-bottom{
+  background:#fff; color:#6b7280; 
+  padding:2px 12px;                      /* ↓ 从 8px 改为 6px */
+  font-size:10px;
+}
+
+/* 放在左右两边都好看（此处保持统一外观，不分左右配色） */
+.cv-row--right .cv-xfr{ }
+
 /* 放在左右两边都好看（这里不改变左右配色，仍保持白底卡片） */
 .cv-row--right .cv-file{ }
+
+/* ===== loc（定位卡片） ===== */
+.cv-loc{
+  background:#fff;
+  border:1px solid #eef1f5;
+  border-radius:12px;
+  overflow:hidden;
+  max-width:66%;
+}
+.cv-loc-head{
+  background:#fff;
+  padding:10px 12px;
+  font-size:13px;
+  font-weight:600;
+  color:#111;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.cv-loc-map{ position:relative; background:#f2f4f7; }
+.cv-loc-map img{ display:block; width:100%; height:auto; }
+.cv-loc-map i{
+  position:absolute; left:50%; top:50%;
+  transform:translate(-50%,-50%);
+  font-size:24px; color:#9aa3ad;
+}
 
         /* 底部输入区 */
         .chat-bottom{
@@ -4962,6 +5541,27 @@ border: 1px dashed var(--line);
         .cvset-avatar{ width:44px; height:44px; border-radius:999px; background:#e9eef6 center/cover no-repeat; flex:0 0 auto; }
         .cvset-name{ font-weight:700; }
 
+        /* 开关美化：把 checkbox 画成滑动开关 */
+.cvset-switch{
+  -webkit-appearance:none; appearance:none;
+  width:44px; height:24px; border-radius:999px;
+  background:#e5e7eb; border:1px solid #e5e7eb;
+  position:relative; cursor:pointer; outline:none; flex:0 0 auto;
+  transition: background .18s, border-color .18s;
+}
+.cvset-switch::after{
+  content:''; position:absolute; top:2px; left:2px;
+  width:20px; height:20px; border-radius:999px; background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.12);
+  transition: transform .18s;
+}
+.cvset-switch:checked{
+  background:#2b84ff; border-color:#2b84ff;
+}
+.cvset-switch:checked::after{
+  transform:translateX(20px);
+}
+
         /* 群成员栅格 */
         .cvset-grid{ display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px 8px; padding:10px 10px 12px; }
         .cvset-mem{ display:flex; flex-direction:column; align-items:center; gap:6px; }
@@ -4984,6 +5584,25 @@ border: 1px dashed var(--line);
 .cv-error{ color:#ff4d4f; font-size:12px; min-height:1.2em; }
 .cv-preview{ width:56px; height:56px; border-radius:999px; background:#e9eef6 center/cover no-repeat; border:1px solid #eef1f5; }
 
+/* 群聊消息特殊处理（放到最后）（左侧）把宽度控制交给外层包裹： */
+.cv-row--left .cv-wrap { 
+  max-width: 76%;        /* 挪到外层，和右侧看齐 */
+}
+
+/* 包裹里各种气泡就不要再二次 76% 了，改成吃满父容器 */
+.cv-wrap .cv-txt,
+.cv-wrap .cv-voice-wrap,
+.cv-wrap .cv-dmt,
+.cv-wrap .cv-file,
+.cv-wrap .cv-xfr,
+.cv-wrap .cv-loc{
+  max-width:100%;
+}
+
+/* 表情包：原来是 40%（相对行容器）；现在在 wrap 里会显得偏小，适当放大到 ~52% */
+.cv-wrap .cv-bqb { 
+  max-width: 52%;
+}
       </style>
 
       <div class="chat-wrap" role="dialog" aria-label="聊天窗口">
@@ -5079,6 +5698,34 @@ border: 1px dashed var(--line);
     </div>
   </div>
 </div>
+
+<!-- 设置聊天缩放（全局生效） -->
+<div class="cv-modal-mask" id="dlgChatScale" aria-hidden="true">
+  <div class="cv-modal" role="dialog" aria-label="设置聊天缩放">
+    <div class="title">设置聊天缩放（全局）</div>
+
+    <div class="cv-field">
+      <label>消息大小</label>
+      <input id="chatScaleMsg" type="range" min="0.8" max="1.6" step="0.05">
+    </div>
+    <div class="cv-field">
+      <label>头像大小</label>
+      <input id="chatScaleAva" type="range" min="0.8" max="1.6" step="0.05">
+    </div>
+
+    <!-- 实时预览：一个头像 + 一条文字气泡（直接复用现有样式） -->
+    <div id="chatScaleDemo" style="display:flex;align-items:flex-end;gap:8px;margin:10px 2px;">
+      <div class="chat-ava" style="background-image:url('https://files.catbox.moe/pcwffp.jpg');"></div>
+      <div class="cv-txt">示例：你好！</div>
+    </div>
+
+    <div class="cv-actions">
+      <button class="cv-btn" id="chatScaleCancel">取消</button>
+      <button class="cv-btn primary" id="chatScaleOK">确定</button>
+    </div>
+  </div>
+</div>
+
 <!-- 确认：清空聊天记录 -->
 <div class="cv-modal-mask" id="dlgConfirmClear" aria-hidden="true">
   <div class="cv-modal" role="dialog" aria-label="确认删除聊天记录">
@@ -5099,6 +5746,23 @@ border: 1px dashed var(--line);
     <div class="cv-actions">
       <button class="cv-btn" id="confirmDeleteCancel">取消</button>
       <button class="cv-btn primary" id="confirmDeleteOK">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 邀请加入群聊 -->
+<div class="cv-modal-mask" id="dlgInviteToGroup" aria-hidden="true">
+  <div class="cv-modal" role="dialog" aria-label="邀请加入群聊">
+    <div class="title">选择要邀请的好友</div>
+    <div class="cv-field">
+      <label>搜索好友</label>
+      <input id="invSearch" placeholder="输入名字过滤">
+    </div>
+    <div id="invFriendList" style="max-height:220px; overflow:auto; border:1px solid #eef1f5; border-radius:8px; padding:6px;"></div>
+    <div class="cv-error" id="invErr"></div>
+    <div class="cv-actions">
+      <button class="cv-btn" id="invCancel">取消</button>
+      <button class="cv-btn primary" id="invOK">确认</button>
     </div>
   </div>
 </div>
@@ -5188,20 +5852,37 @@ border: 1px dashed var(--line);
 
             /* 状态文案（群聊/私聊不同） */
             const chatStatus = $('#chatStatus');
-            if (chatStatus) {
-              if (this.kind === 'group') {
-                chatStatus.textContent = '群聊 · 可 @所有人';
-              } else {
-                const pool = [
-                  '在线 · 今天宜聊天，宜发红包',
-                  '手机在线 · 5G 满格',
-                  '在线 · 正在敲前端代码',
-                  '在线 · 电量 100%',
-                  '刚刚活跃',
-                ];
-                chatStatus.textContent = pool[Math.floor(Math.random() * pool.length)];
-              }
-            }
+            // 用“对方最新 sig”覆盖顶部小字；没有就显示“在线”
+const applySigStatus = () => {
+  if (!chatStatus || this.kind !== 'dm') return;
+  const sess = RMQQ.Data.findSession?.(this.login, 'dm', this.peerName);
+  const items = Array.isArray(sess?.items) ? sess.items : [];
+  let sig = '';
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (!it || it.type !== 'sig') continue;
+    // 发起方是“当前联系人” => speaker 等于联系人名，或者 out === false（对方发）
+    const fromPeer = (String(it.speaker || '') === String(this.peerName)) || it.out === false;
+    if (fromPeer) {
+      sig = String(Array.isArray(it.args) ? (it.args[0] ?? it.content) : it.content || '').trim();
+      if (sig) break;
+    }
+  }
+  const txt = sig || '在线';
+  // 简单截断：太长加省略号（视觉上更稳，也不需要动 CSS）
+  chatStatus.textContent = txt.length > 20 ? (txt.slice(0, 20) + '…') : txt;
+};
+applySigStatus();
+
+// 应用世界书里的全局聊天缩放（msg/ava）
+(async () => {
+  try {
+    const all = await RMPhoneToWorldBook.getAll();
+    const cs  = all?.global?.chatScale || {};
+    document.documentElement.style.setProperty('--cv-msg-scale', String(Number(cs.msg) || 1));
+    document.documentElement.style.setProperty('--cv-ava-scale', String(Number(cs.ava) || 1));
+  } catch {}
+})();
 
             /* 发送消息 → 统一走 Data */
             const main = $('#cvMain');
@@ -5292,7 +5973,7 @@ genErrorOK  ?.addEventListener('click', ()=>{ hideMask(dlgGenError); genErrorTex
     });
 
     // ========= 只取“未被回复”的尾巴，拼成 fragment =========
-    const collectTail = (scope)=>{
+    const collectTail = (scope, opts = {})=>{
       const data = RMQQ.Data.getState(); // 只读快照
       const accounts = [];
       const addSession = (login, sess)=>{
@@ -5329,18 +6010,44 @@ genErrorOK  ?.addEventListener('click', ()=>{ hideMask(dlgGenError); genErrorTex
           }
         }
       }
+
+      // 新增：把“额外查看”的会话都塞成空框（可跨聊天/跨账号/可多选）
+if (opts && Array.isArray(opts.extraBlankSessions)) {
+  for (const sel of opts.extraBlankSessions) {
+    if (!sel || !sel.login || !sel.kind || !sel.peer) continue;
+    const login = sel.login, kind = sel.kind, peer = sel.peer;
+    let acc = accounts.find(a => a.login === login);
+    const hasSess = !!acc?.sessions?.some(s => s.kind === kind && s.peer === peer);
+    if (!hasSess) {
+      if (!acc) { acc = { login, sessions: [] }; accounts.push(acc); }
+      acc.sessions.push({ kind, peer, items: [], _blank: true }); // 标 _blank 以便 stringify 输出空框
+    }
+  }
+}
+
       return { qq:{ accounts } };
     };
 
     // ========= 真正触发 generate =========
-    async function triggerGenerate(scope){
+    const triggerGenerate = async (scope) => {
       const prevTxt = send.textContent;
       send.disabled = true; send.textContent = '生成中…';
       let raw = '';
       try{
-        const fragment   = collectTail(scope);
-        const user_input = RMPhoneToChatMessage.buildRaw(fragment);
-        if (!user_input.trim()) throw new Error('没有可用的“我方未被回复的尾巴消息”。');
+        // 读取“全局已勾选的会话”列表（跨聊天/跨账号/可多选）
+const extraList = (RMQQ?.Extra?.list && RMQQ.Extra.list()) || [];
+
+// 把原来的 collectTail(scope) 改成带“多会话空框”的版本
+const fragment   = collectTail(scope, { extraBlankSessions: extraList });
+const user_input = RMPhoneToChatMessage.buildRaw(fragment);
+
+// 允许“仅空对话”也能生成（没有尾巴时也不报错）
+if (!user_input.trim()) {
+  const hasBlank = Array.isArray(fragment?.qq?.accounts)
+    && fragment.qq.accounts.some(a => Array.isArray(a.sessions)
+      && a.sessions.some(s => s && s._blank === true));
+  if (!hasBlank) throw new Error('没有可用的“我方未被回复的尾巴消息”。');
+}
 
         raw = await generate({ user_input });          // 只用 user_input，其他默认
         const changed = RMQQ.Data.applyRaw(raw);       // 解析→补丁→入库
@@ -5418,7 +6125,65 @@ genErrorOK  ?.addEventListener('click', ()=>{ hideMask(dlgGenError); genErrorTex
                 box.classList.toggle('is-open');
                 keepAtBottomIfUserWasThere(box);
               }
+
+              const xfr = e.target.closest('.cv-xfr.is-pending');
+if (xfr) {
+  const sender   = xfr.getAttribute('data-sender')  || '';
+  const receiver = xfr.getAttribute('data-receiver')|| '';
+  const amount   = xfr.getAttribute('data-amount')  || '';
+
+  // 只有“对方发给我”的才有交互：DM 一定要是对方→我；群聊也必须接收人是我
+  const canHandle =
+    (this.kind === 'dm'    && receiver === this.login && sender !== this.login) ||
+    (this.kind === 'group' && receiver === this.login && sender !== this.login);
+
+  if (canHandle) openXfrActionDialog(sender, amount);
+  return;
+}
+
+// 文件卡片：只对“对方发来的文件”弹窗（DM 左侧气泡）
+const fileCard = e.target.closest('.cv-file');
+if (fileCard) {
+  const row = fileCard.closest('.cv-row');
+  const isIncoming = row?.classList.contains('cv-row--left'); // 左边 = 对方
+  if (this.kind === 'dm' && isIncoming) {
+    const fname = (fileCard.getAttribute('data-fname')
+                || fileCard.querySelector('.cv-file-name')?.textContent
+                || '未命名文件').trim();
+    openFileRcvDialog(fname);
+  }
+  return;
+}
+
             });
+
+            // 双击任意头像：发送 [nudge|我方|对象]
+main.addEventListener('dblclick', e => {
+  const ava = e.target.closest('.chat-ava');
+  if (!ava) return;
+
+  const row = ava.closest('.cv-row');
+  let target = '';
+
+  if (row?.classList.contains('cv-row--right')) {
+    // 右侧=我自己
+    target = this.login;
+  } else if (this.kind === 'group') {
+    // 群聊：从名字标签拿发言人
+    target = row?.querySelector('.cv-name')?.textContent?.trim() || '对方';
+  } else {
+    // 私聊左侧=对方
+    target = this.peerName;
+  }
+
+  RMQQ.Data.pushMsg({
+    login: this.login,       // sender 固定是“我方”
+    kind: this.kind,
+    peer: this.peerName,
+    type: 'nudge',
+    args: [target]           // {{对象}}
+  });
+});
 
             /* 工具图标切换（保留你原交互） */
             const iconMap = {
@@ -5473,7 +6238,6 @@ const openAddEmojiDialog = () => {
       const label = (labelInput?.value || '').trim();
       let url = (urlInput?.value || '').trim();
       if (!label || !url){ if (err) err.textContent = '请把描述和 URL 填完整'; return; }
-      if (!isFull(url)) url = CATBOX + url;   // 短链接补前缀
       try{
         await RMPhoneToWorldBook.addEmojiToStore?.(label, url);
         dlg.classList.remove('show');
@@ -5491,6 +6255,326 @@ const openAddEmojiDialog = () => {
   dlg.setAttribute('aria-hidden', 'false');
 }
 
+// 通用发送弹窗：openSendDialog(title, fields, onOK)
+// fields: [{id,label,placeholder}]
+const openSendDialog = (title, fields, onOK) => {
+  let dlg = this.root.querySelector('#dlgSendGeneric');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'dlgSendGeneric';
+    dlg.className = 'cv-modal-mask';
+    dlg.setAttribute('aria-hidden', 'true');
+    dlg.innerHTML = `
+      <div class="cv-modal" role="dialog" aria-label="发送">
+        <div class="title"></div>
+        <div class="body"></div>
+        <div class="cv-error" id="sgErr"></div>
+        <div class="cv-actions">
+          <button class="cv-btn" id="sgCancel">取消</button>
+          <button class="cv-btn primary" id="sgOK">确认</button>
+        </div>
+      </div>`;
+    this.root.querySelector('.chat-wrap')?.appendChild(dlg);
+    // 绑定一次通用事件：点蒙层关闭
+    dlg.addEventListener('click', e => { if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); } });
+  }
+
+  const $ = sel => dlg.querySelector(sel);
+  // 填标题与表单
+  $('.title').textContent = title || '发送';
+  const body = $('.body');
+  body.innerHTML = '';
+  (fields || []).forEach(f => {
+    const wrap = document.createElement('div');
+    wrap.className = 'cv-field';
+    wrap.innerHTML = `
+      <label>${f.label || f.id}</label>
+      <input id="sg_${f.id}" placeholder="${f.placeholder || ''}" />`;
+    body.appendChild(wrap);
+  });
+
+  // 事件 —— 先清空错误提示 & 清除旧监听（克隆按钮可以一次性移除所有 addEventListener）
+const errBox = $('#sgErr'); if (errBox) errBox.textContent = '';
+
+const oldOK = $('#sgOK');
+const oldCancel = $('#sgCancel');
+const btnOK = oldOK ? oldOK.cloneNode(true) : null;
+const btnCancel = oldCancel ? oldCancel.cloneNode(true) : null;
+if (btnOK && oldOK) oldOK.replaceWith(btnOK);
+if (btnCancel && oldCancel) oldCancel.replaceWith(btnCancel);
+
+// 重新绑定（只生效一次）
+btnCancel?.addEventListener('click', () => {
+  dlg.classList.remove('show');
+  dlg.setAttribute('aria-hidden', 'true');
+}, { once: true });
+
+btnOK?.addEventListener('click', () => {
+  const vals = {};
+  (fields || []).forEach(f => { vals[f.id] = (dlg.querySelector('#sg_' + f.id)?.value || '').trim(); });
+  try {
+    onOK && onOK(vals);
+    dlg.classList.remove('show');
+    dlg.setAttribute('aria-hidden', 'true');
+  } catch (e) {
+    const err = $('#sgErr');
+    if (err) err.textContent = '发送失败，请重试';
+  }
+}, { once: true });
+
+  dlg.classList.add('show');
+  dlg.setAttribute('aria-hidden', 'false');
+};
+
+// 发起转账弹窗：转账对象（单选）+ 金额
+const openTransferDialog = () => {
+  let dlg = this.root.querySelector('#dlgXfrSend');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'dlgXfrSend';
+    dlg.className = 'cv-modal-mask';
+    dlg.setAttribute('aria-hidden', 'true');
+    dlg.innerHTML = `
+      <div class="cv-modal" role="dialog" aria-label="转账">
+        <div class="title">请输入转账信息</div>
+        <div class="cv-field">
+          <label>转账金额</label>
+          <input id="xfrAmt" placeholder="比如：66.00" />
+        </div>
+        <div class="cv-field">
+          <label>转账对象</label>
+          <div id="xfrToList" style="max-height:180px; overflow:auto; border:1px solid #eef1f5; border-radius:8px; padding:6px;"></div>
+        </div>
+        <div class="cv-error" id="xfrErr"></div>
+        <div class="cv-actions">
+          <button class="cv-btn" id="xfrCancel">取消</button>
+          <button class="cv-btn primary" id="xfrOK">确认</button>
+        </div>
+      </div>`;
+    this.root.querySelector('.chat-wrap')?.appendChild(dlg);
+    // 点击蒙层关闭
+    dlg.addEventListener('click', e => { if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); } });
+  }
+  const $ = sel => dlg.querySelector(sel);
+
+  // 渲染“转账对象”单选列表
+  const list = $('#xfrToList'); list.innerHTML = '';
+  const makeItem = (name) => {
+    const el = document.createElement('label');
+    el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;cursor:pointer;';
+    el.innerHTML = `<input type="radio" name="xfrTo" value="${name}"><span>${name}</span>`;
+    return el;
+  };
+
+  if (this.kind === 'dm') {
+    // 私聊：默认就是对方
+    list.appendChild(makeItem(this.peerName));
+    const r = list.querySelector('input[name="xfrTo"]'); if (r) r.checked = true;
+  } else {
+    // 群聊：仅列出群成员（来自世界书）
+    const getGroupMembers = (wb, login, gname) => {
+      const node = wb?.login?.[login]?.contacts?.groups?.[gname];
+      const arr = (node && Array.isArray(node.members)) ? node.members : [];
+      return arr.map(m => (typeof m === 'string' ? m : m?.name)).filter(Boolean);
+    };
+    const names = getGroupMembers(this._wbQQ || {}, this.login, this.peerName);
+    names.forEach(n => list.appendChild(makeItem(n)));
+  }
+
+  // 事件
+  $('#xfrErr').textContent = '';
+  $('#xfrCancel').onclick = () => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); };
+  $('#xfrOK').onclick = () => {
+    const amt = ($('#xfrAmt').value || '').trim();
+    const to  = (dlg.querySelector('input[name="xfrTo"]:checked')?.value || '').trim();
+    if (!to)  { $('#xfrErr').textContent = '请选择转账对象'; return; }
+    if (!amt) { $('#xfrErr').textContent = '请输入金额'; return; }
+
+    // 发送：[xfr|我方|对方|金额]
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'xfr',
+      args: [to, amt]   // 不要把我方再放进 args 了，发出方就是 speaker
+    });
+    dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true');
+  };
+
+  dlg.classList.add('show');
+  dlg.setAttribute('aria-hidden', 'false');
+};
+
+// 处理对方转给“我”的转账卡片：接受 / 退回
+const openXfrActionDialog = (sender, amount) => {
+  let dlg = this.root.querySelector('#dlgXfrAction');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'dlgXfrAction';
+    dlg.className = 'cv-modal-mask';
+    dlg.setAttribute('aria-hidden', 'true');
+    dlg.innerHTML = `
+      <div class="cv-modal" role="dialog" aria-label="处理转账">
+        <div class="title" id="xfrActTitle"></div>
+        <div class="cv-field">
+          <label>请选择</label>
+          <div>
+            <label style="display:flex;align-items:center;gap:6px;margin:4px 0;">
+              <input type="radio" name="xfrAct" value="rcv" checked><span>接受</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin:4px 0;">
+              <input type="radio" name="xfrAct" value="rfd"><span>退回</span>
+            </label>
+          </div>
+        </div>
+        <div class="cv-actions">
+          <button class="cv-btn" id="xfrActCancel">取消</button>
+          <button class="cv-btn primary" id="xfrActOK">确认</button>
+        </div>
+      </div>`;
+    this.root.querySelector('.chat-wrap')?.appendChild(dlg);
+    dlg.addEventListener('click', e => { if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); } });
+  }
+  const $ = sel => dlg.querySelector(sel);
+  $('#xfrActTitle').textContent = `${sender}向您转账￥${amount}`;
+  $('#xfrActCancel').onclick = () => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); };
+  $('#xfrActOK').onclick = () => {
+    const act = dlg.querySelector('input[name="xfrAct"]:checked')?.value;
+    const type = act === 'rfd' ? 'xfr.rfd' : 'xfr.rcv';
+    // 发送：[xfr.rcv|我方|对方|金额] / [xfr.rfd|我方|对方|金额]
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type,
+      args: [ sender, String(amount || '') ]   // sender=对方（转账方）
+    });
+    dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true');
+  };
+
+  dlg.classList.add('show');
+  dlg.setAttribute('aria-hidden', 'false');
+};
+
+// 接受文件弹窗：显示文件名；确认后发送 file.rcv
+const openFileRcvDialog = (fname) => {
+  let dlg = this.root.querySelector('#dlgFileRcv');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'dlgFileRcv';
+    dlg.className = 'cv-modal-mask';
+    dlg.setAttribute('aria-hidden', 'true');
+    dlg.innerHTML = `
+      <div class="cv-modal" role="dialog" aria-label="接收文件">
+        <div class="title">是否接受该文件？</div>
+        <div class="cv-field">
+          <label>文件</label>
+          <div id="fileRcvName" style="font-size:13px;"></div>
+        </div>
+        <div class="cv-actions">
+          <button class="cv-btn" id="fileRcvCancel">取消</button>
+          <button class="cv-btn primary" id="fileRcvOK">确认</button>
+        </div>
+      </div>`;
+    this.root.querySelector('.chat-wrap')?.appendChild(dlg);
+    // 点蒙层关闭
+    dlg.addEventListener('click', e => {
+      if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); }
+    });
+  }
+  const $ = sel => dlg.querySelector(sel);
+  $('#fileRcvName').textContent = fname || '未命名文件';
+  $('#fileRcvCancel').onclick = () => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); };
+  $('#fileRcvOK').onclick = () => {
+    // 发送：[file.rcv|我方|文件名]
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'file.rcv',
+      args: [fname || '未命名文件']
+    });
+    dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true');
+  };
+
+  dlg.classList.add('show');
+  dlg.setAttribute('aria-hidden', 'false');
+};
+
+// 邀请入群弹窗：从好友里多选，确定后发送 [invite]
+const openInviteDialog = async () => {
+  const dlg = this.root.querySelector('#dlgInviteToGroup');
+  if (!dlg) return;
+
+  const $ = sel => dlg.querySelector(sel);
+  const ipt = $('#invSearch');
+  const list = $('#invFriendList');
+  const err  = $('#invErr');
+  const btnOK = $('#invOK');
+  const btnCancel = $('#invCancel');
+
+  // 读取“当前登录”的好友 & 当前群成员，候选=好友-成员
+  const wb = (await RMPhoneToWorldBook.getApp('qq').catch(() => ({}))) || {};
+  const node = wb?.login?.[this.login] || {};
+  const friends = Object.keys(node?.contacts?.friends || {});
+  const members = Array.isArray(node?.contacts?.groups?.[this.peerName]?.members)
+    ? node.contacts.groups[this.peerName].members.map(m => (typeof m === 'string' ? m : m?.name)).filter(Boolean)
+    : [];
+  const candidates = friends.filter(n => !members.includes(n));
+
+  const makeItem = (name) => {
+    const el = document.createElement('div');
+    el.className = 'grp-item'; // 复用你创建群聊的样式写法
+    el.dataset.name = name;
+    el.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:8px;cursor:pointer;';
+    el.innerHTML = `<span>${name}</span><i class="fi fi-rr-check" style="opacity:.2;"></i>`;
+    el.addEventListener('click', () => {
+      el.classList.toggle('selected');
+      el.querySelector('i').style.opacity = el.classList.contains('selected') ? '1' : '.2';
+    });
+    return el;
+  };
+
+  // 渲染候选
+  list.innerHTML = '';
+  candidates.forEach(n => list.appendChild(makeItem(n)));
+
+  // 搜索过滤（和“创建群聊”一致）
+  ipt.value = '';
+  ipt.oninput = (e) => {
+    const key = String(e.target.value || '').trim().toLowerCase();
+    Array.from(list.children).forEach(el => {
+      const ok = (el.dataset.name || '').toLowerCase().includes(key);
+      el.style.display = ok ? '' : 'none';
+    });
+  };
+
+  // 取消
+  btnCancel.onclick = () => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); };
+
+  // 确认：发送 [invite|我方|小明、小红]
+  btnOK.onclick = () => {
+    const picks = Array.from(list.querySelectorAll('.grp-item.selected')).map(el => el.dataset.name).filter(Boolean);
+    if (!picks.length) { err.textContent = '请选择至少 1 位好友'; return; }
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'invite',
+      args: [picks.join('、')]  // 用顿号；你也可以改成逗号
+    });
+    dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true');
+  };
+
+  // 点击蒙层关闭（只需一次性绑定）
+  dlg.addEventListener('click', e => {
+    if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); }
+  }, { once: true });
+
+  dlg.classList.add('show');
+  dlg.setAttribute('aria-hidden', 'false');
+};
+
 const renderPanel = (key) => {
   if (!panel) return;
 
@@ -5506,17 +6590,17 @@ const renderPanel = (key) => {
         <button class="cv-ext-item">
           <div class="box"><i class="fi fi-sr-video-camera-alt"></i></div><div class="label">视频通话</div>
         </button>
-        <button class="cv-ext-item">
+        <button class="cv-ext-item" data-act="loc">
           <div class="box"><i class="fi fi-sr-marker"></i></div><div class="label">位置</div>
         </button>
-        <button class="cv-ext-item">
+        <button class="cv-ext-item" data-act="file">
           <div class="box"><i class="fi fi-sr-folder"></i></div><div class="label">文件</div>
         </button>
 
         <button class="cv-ext-item">
           <div class="box"><i class="fi fi-sr-wishlist-star"></i></div><div class="label">收藏</div>
         </button>
-        <button class="cv-ext-item">
+        <button class="cv-ext-item" data-act="transfer">
           <div class="box"><i class="fi fi-sr-wallet-change"></i></div><div class="label">转账</div>
         </button>
         <button class="cv-ext-item">
@@ -5536,10 +6620,78 @@ const renderPanel = (key) => {
           <div class="box"><i class="fi fi-sr-earbuds"></i></div><div class="label">一起听歌</div>
         </button>
         <button class="cv-ext-item">
-          <div class="box"><i class="fi fi-ss-sack-dollar"></i></div><div class="label">收款</div>
+          <div class="box"><i class="fi fi-sr-sack-dollar"></i></div><div class="label">收款</div>
         </button>
       </div>
     `);
+    // “文件”点击 → 弹窗 → 发送 file
+const btnFile = panel.querySelector('.cv-ext-item[data-act="file"]');
+btnFile?.addEventListener('click', () => {
+  openSendDialog('请输入要发送的文件信息', [
+    { id: 'fn', label: '文件名', placeholder: '比如：报告.docx' },
+    { id: 'fs', label: '文件大小', placeholder: '比如：2.3 MB' }
+  ], (vals) => {
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'file',
+      args: [vals.fn || '未命名文件', vals.fs || '']
+    });
+  });
+});
+
+// “转账”点击 → 弹窗 → 发送 xfr
+const btnXfr = panel.querySelector('.cv-ext-item[data-act="transfer"]');
+btnXfr?.addEventListener('click', () => {
+  if (expand.classList.contains('show')) setExpand(false);
+  openTransferDialog();   // 见第 3 步：我们会定义这个函数
+});
+
+// “位置”点击 → 弹窗 → 发送 loc
+const btnLoc = panel.querySelector('.cv-ext-item[data-act="loc"]');
+btnLoc?.addEventListener('click', () => {
+  // 复用你已有的简易输入弹窗风格
+  let dlg = this.root.querySelector('#dlgLoc');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'dlgLoc';
+    dlg.className = 'cv-modal-mask';
+    dlg.setAttribute('aria-hidden', 'true');
+    dlg.innerHTML = `
+      <div class="cv-modal" role="dialog" aria-label="发送位置">
+        <div class="title">请输入位置信息</div>
+        <div class="cv-field">
+          <label>位置</label>
+          <input id="locText" placeholder="例如：椿城二中…"/>
+          <div id="locErr" style="color:#e11;font-size:12px;margin-top:4px;"></div>
+        </div>
+        <div class="cv-actions">
+          <button class="cv-btn" id="locCancel">取消</button>
+          <button class="cv-btn primary" id="locOK">确认</button>
+        </div>
+      </div>`;
+    this.root.querySelector('.chat-wrap')?.appendChild(dlg);
+    dlg.addEventListener('click', e => { if (e.target === dlg) { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); } });
+  }
+  const $ = s => dlg.querySelector(s);
+  $('#locErr').textContent = '';
+  $('#locCancel').onclick = () => { dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true'); };
+  $('#locOK').onclick = () => {
+    const txt = ($('#locText').value || '').trim();
+    if (!txt) { $('#locErr').textContent = '请输入位置信息'; return; }
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'loc',
+      args: [txt]
+    });
+    dlg.classList.remove('show'); dlg.setAttribute('aria-hidden','true');
+  };
+  dlg.classList.add('show'); dlg.setAttribute('aria-hidden','false');
+});
+
     return;
   }
 
@@ -5558,7 +6710,7 @@ const normUrl = s => (s ? (isFull(s) ? s : CATBOX + s) : '');
 // ① 首格：添加表情
 const addBtn = document.createElement('button');
 addBtn.className = 'cv-ext-item add';
-addBtn.innerHTML = '<div class="box"><i class="fi fi-rr-add"></i></div><div class="label">添加表情</div>';
+addBtn.innerHTML = '<div class="box"><i class="fi fi-rr-plus"></i></div><div class="label">添加表情</div>';
 addBtn.addEventListener('click', () => openAddEmojiDialog());
 grid.appendChild(addBtn);
 
@@ -5595,7 +6747,7 @@ login: this.login,
 kind: this.kind,
 peer: this.peerName,
 type: 'bqb',
-args: [label, url]
+args: [label, rawUrl] // ← 不做补全
 });
 });
 grid.appendChild(btn);
@@ -5672,8 +6824,54 @@ const onToolClick = e => {
     btn.dataset.state = String(next);
   }
 
-  // 这四个键共用展开区；点相同的键 = 收起；点不同键 = 切换内容
-  const keys = ['plus','emoji','micro','hongbao'];
+  // 通用：点任意一个键，都把其它键“灭灯”（状态复位）
+this.root.querySelectorAll('.cv-tool-btn[data-key]').forEach(b => {
+  if (b !== btn) {
+    b.classList.remove('is-active');   // 去高亮
+    b.dataset.state = '1';             // 图标回到第1态
+    const k = b.dataset.key;
+    const im = b.querySelector('img');
+    if (im && iconMap[k]) im.src = iconMap[k][0];
+  }
+});
+
+  // micro：先收起展开区，再弹窗输入并发送 voice
+if (key === 'micro') {
+  if (expand.classList.contains('show')) setExpand(false);
+  openSendDialog('请输入要发送的语音消息', [
+    { id: 'dur', label: '语音时长', placeholder: '比如：12s' },
+    { id: 'txt', label: '语音内容', placeholder: '（可选）转成文字' }
+  ], (vals) => {
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'voice',
+      args: [vals.dur || '', vals.txt || '']
+    });
+  });
+  return;
+}
+
+// image：先收起展开区，再弹窗输入并发送 dmt
+if (key === 'image') {
+  if (expand.classList.contains('show')) setExpand(false);
+  openSendDialog('请输入要发送的文件信息', [
+    { id: 'txt', label: '多媒体消息内容', placeholder: '比如：这是一段视频/图片说明' }
+  ], (vals) => {
+    RMQQ.Data.pushMsg({
+      login: this.login,
+      kind: this.kind,
+      peer: this.peerName,
+      type: 'dmt',
+      args: [vals.txt || '']
+    });
+  });
+  return;
+}
+
+  // 这三个键共用展开区；点相同的键 = 收起；点不同键 = 切换内容
+  const keys = ['plus','emoji','hongbao'];
   if (keys.includes(key)) {
     const isOpen = expand.classList.contains('show');
     const same   = btn.classList.contains('is-active');
@@ -5744,9 +6942,11 @@ this.root.querySelectorAll('.cv-tool-btn[data-key]').forEach(b => {
           </div>
         </div>
         <div class="cvset-card">
+          <div class="cvset-row"><div class="label">额外查看此会话</div><input type="checkbox" id="cvExtraInspectCurrent" class="cvset-switch"></div>
+          <div class="cvset-row"><div class="label">加入黑名单</div><input type="checkbox" id="cvBlockThisPeer" class="cvset-switch"></div>
           <div class="cvset-row" data-act="set-peer-avatar"><div class="label">设置角色头像（对方的）</div><i class="fi fi-rr-angle-small-right chev"></i></div>
           <div class="cvset-row" data-act="set-chat-bg"><div class="label">设置当前聊天背景</div><i class="fi fi-rr-angle-small-right chev"></i></div>
-          <div class="cvset-row"><div class="label">设置聊天页面缩放</div><i class="fi fi-rr-angle-small-right chev"></i></div>
+          <div class="cvset-row" data-act="set-chat-scale"><div class="label">设置聊天页面缩放</div><i class="fi fi-rr-angle-small-right chev"></i></div>
           <div class="cvset-row" data-act="clear-chat"><div class="label">删除所有聊天记录</div><i class="fi fi-rr-angle-small-right chev"></i></div>
         </div>
         <div class="cvset-card"><div class="cvset-row center cvset-danger" data-act="delete-friend">删除好友</div></div>
@@ -5822,9 +7022,10 @@ this.root.querySelectorAll('.cv-tool-btn[data-key]').forEach(b => {
     </div>
 
     <div class="cvset-card">
+      <div class="cvset-row"><div class="label">额外查看此会话</div><input type="checkbox" id="cvExtraInspectCurrent" class="cvset-switch"></div>
       <div class="cvset-row" data-act="set-group-avatar"><div class="label">设置群聊头像</div><i class="fi fi-rr-angle-small-right chev"></i></div>
       <div class="cvset-row" data-act="set-chat-bg"><div class="label">设置当前聊天背景</div><i class="fi fi-rr-angle-small-right chev"></i></div>
-      <div class="cvset-row"><div class="label">设置聊天页面缩放</div><i class="fi fi-rr-angle-small-right chev"></i></div>
+      <div class="cvset-row" data-act="set-chat-scale"><div class="label">设置聊天页面缩放</div><i class="fi fi-rr-angle-small-right chev"></i></div>
       <div class="cvset-row" data-act="clear-chat"><div class="label">删除所有聊天记录</div><i class="fi fi-rr-angle-small-right chev"></i></div>
     </div>
     <div class="cvset-card"><div class="cvset-row center cvset-danger" data-act="disband-group">解散群聊</div></div>
@@ -5838,6 +7039,30 @@ this.root.querySelectorAll('.cv-tool-btn[data-key]').forEach(b => {
             };
             renderSettings();
 
+
+// 每次渲染设置后，把两个开关的状态回显上去
+const syncSettingsToggles = () => {
+  // 额外查看此会话
+  const box2 = cvSetBody.querySelector('#cvExtraInspectCurrent');
+  if (box2) box2.checked = RMQQ.Extra.has(this.login, this.kind, this.peerName);
+
+  // 加入黑名单（只在私聊）
+  const blk = cvSetBody.querySelector('#cvBlockThisPeer');
+  if (blk && this.kind === 'dm') {
+    const sess = RMQQ.Data.findSession?.(this.login, 'dm', this.peerName);
+    const items = Array.isArray(sess?.items) ? sess.items : [];
+    let on = false;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (!it || it.speaker !== this.login) continue; // 只看我自己发的
+      if (it.type === 'block')   { on = true;  break; }
+      if (it.type === 'unblock') { on = false; break; }
+    }
+    blk.checked = on;
+  }
+};
+
+
             const openSettings = () => {
               cvSet.classList.add('show');
               cvSet.setAttribute('aria-hidden', 'false');
@@ -5848,21 +7073,56 @@ this.root.querySelectorAll('.cv-tool-btn[data-key]').forEach(b => {
             };
 
             const onMore = () => {
-              renderSettings();
-              openSettings();
-            };
+  renderSettings();
+  syncSettingsToggles(); // 新增：每次渲染后把开关回显
+  openSettings();
+};
             const onSetBack = () => closeSettings();
             $('.chat-more')?.addEventListener('click', onMore);
             $('#cvSet .cvset-back')?.addEventListener('click', onSetBack);
             this._handlers.push(['.chat-more', 'click', onMore], ['#cvSet .cvset-back', 'click', onSetBack]);
+
+            const onExtraChange = (e)=>{
+  if (e.target && e.target.id === 'cvExtraInspectCurrent'){
+    const checked = !!e.target.checked;
+    const info = { login: this.login, kind: this.kind, peer: this.peerName };
+    if (checked) {
+      RMQQ.Extra.add(info.login, info.kind, info.peer);
+    } else {
+      RMQQ.Extra.remove(info.login, info.kind, info.peer);
+    }
+  }
+
+  if (e.target && e.target.id === 'cvBlockThisPeer') {
+  const checked = !!e.target.checked;
+  // 发起方 = 当前登录；被拉黑对象 = 当前会话对方
+  RMQQ.Data.pushMsg({
+    login: this.login,
+    kind: 'dm',
+    peer: this.peerName,
+    type: checked ? 'block' : 'unblock',
+    args: [this.peerName] // 第1个参数就是“被拉黑的对象”
+  });
+}
+
+};
+
+cvSetBody.addEventListener('change', onExtraChange);
+this._handlers.push(['#cvSetBody','change',onExtraChange]);
+
             // 打开“设置角色头像 / 聊天背景”的弹窗（只在私聊生效）
             cvSetBody.addEventListener('click', e => {
+              // 点“群聊成员”格子里的「邀请」
+const invTile = e.target.closest('.cvset-invite');
+if (invTile && this.kind === 'group') { openInviteDialog(); return; }
+
               const row = e.target.closest('.cvset-row');
               if (!row) return;
               const act = row.dataset.act || '';
               if (act === 'set-peer-avatar' && this.kind === 'dm') openPeerAvatarDialog(); // 私聊：对方头像
               if (act === 'set-group-avatar' && this.kind === 'group') openGroupAvatarDialog(); // 群聊：群头像
               if (act === 'set-chat-bg') openChatBgDialog(); // 两边都可以
+              if (act === 'set-chat-scale') openChatScaleDialog(); // 两边都可以
               // —— 新增：清空聊天记录（DM 和群都可以）——
               if (act === 'clear-chat') {
                 // 第4步里会加 showMask/hideMask，这里先调用即可
@@ -6069,6 +7329,47 @@ const setGenScope = async (v) => {
               showMask(dlgBg);
             };
 
+            /* —— 新增：聊天缩放（全局） —— */
+const dlgScale      = $('#dlgChatScale');
+const iptScaleMsg   = $('#chatScaleMsg');
+const iptScaleAva   = $('#chatScaleAva');
+const btnScaleOK    = $('#chatScaleOK');
+const btnScaleCancel= $('#chatScaleCancel');
+
+const setScaleVars = (msg = 1, ava = 1) => {
+  document.documentElement.style.setProperty('--cv-msg-scale', String(msg || 1));
+  document.documentElement.style.setProperty('--cv-ava-scale', String(ava || 1));
+};
+
+const openChatScaleDialog = async () => {
+  let msg = 1, ava = 1;
+  try {
+    const all  = await RMPhoneToWorldBook.getAll();
+    const cs   = all?.global?.chatScale || {};
+    msg = Number(cs.msg) || 1;
+    ava = Number(cs.ava) || 1;
+  } catch {}
+  iptScaleMsg.value = String(msg);
+  iptScaleAva.value = String(ava);
+
+  const onInput = () => setScaleVars(Number(iptScaleMsg.value), Number(iptScaleAva.value));
+  iptScaleMsg.oninput = onInput;
+  iptScaleAva.oninput = onInput;
+  onInput();               // 打开时先预览当前数值
+  showMask(dlgScale);
+
+  // 取消 = 还原
+  btnScaleCancel.onclick = () => { setScaleVars(msg, ava); hideMask(dlgScale); };
+
+  // 确认 = 保存到世界书 global，并保持变量生效
+  btnScaleOK.onclick = async () => {
+    const m = Number(iptScaleMsg.value) || 1;
+    const a = Number(iptScaleAva.value) || 1;
+    await RMPhoneToWorldBook.saveGlobal({ chatScale: { msg: m, ava: a } });
+    hideMask(dlgScale);
+  };
+};
+
             btnBgCancel?.addEventListener('click', () => hideMask(dlgBg));
             btnBgOK?.addEventListener('click', async () => {
               const url = (iptBg.value || '').trim();
@@ -6182,6 +7483,68 @@ const setGenScope = async (v) => {
               row.className = 'cv-row ' + (it.out ? 'cv-row--right' : 'cv-row--left');
 
               const args = Array.isArray(it.args) ? it.args : [];
+              // ★ 新增：居中“系统/时间/文件接收”提示，不属于任何一方
+if (it.type === 'time') {
+  const tip = document.createElement('div');
+  tip.className = 'cv-empty';
+  tip.textContent = (it.content || args[0] || '').trim() || '刚刚';
+  main.appendChild(tip);
+  return; // 别再走左右气泡的流程
+}
+
+if (it.type === 'file.rcv') {
+  const tip = document.createElement('div');
+  tip.className = 'cv-empty';
+  const who = (it.speaker || '').trim() || '有人';
+  const fname = (args[0] || '').trim() || '未命名文件';
+  tip.textContent = `${who} 接受了文件“${fname}”`;
+  main.appendChild(tip);
+  return; // 同上
+}
+
+// 新增：黑名单系统提示（居中）
+if (it.type === 'block' || it.type === 'unblock') {
+  const tip = document.createElement('div');
+  tip.className = 'cv-empty';
+  const a = (it.speaker || '').trim() || '某人';   // 发起方（第2段）
+  const b = (args[0] || '').trim() || '对方';      // 被拉黑对象（第3段起的第1个参数）
+  tip.textContent = (it.type === 'block')
+    ? `${a}拉黑了${b}。`
+    : `${a}取消拉黑了${b}。`;
+  main.appendChild(tip);
+  return; // 走完就别再渲染左右气泡
+}
+
+if (it.type === 'nudge') {
+  const tip = document.createElement('div');
+  tip.className = 'cv-empty';
+  const who = (it.speaker || '').trim() || '有人';
+  const obj = (Array.isArray(it.args) && it.args[0] ? String(it.args[0]).trim() : '对方');
+  tip.textContent = `${who} 拍了拍 ${obj}`;
+  main.appendChild(tip);
+  return;
+}
+
+// 邀请入群：居中系统提示
+if (it.type === 'invite') {
+  const tip = document.createElement('div');
+  tip.className = 'cv-empty';
+  const who = (it.speaker || '').trim() || '某人';
+  // 兼容：[invite|A|B、C] 或 [invite|A|B|C]
+  const list = (Array.isArray(it.args) && it.args.length > 1)
+    ? it.args.join('、')
+    : String((it.args?.[0] || '')).split(/[，,、]\s*/).filter(Boolean).join('、');
+  tip.textContent = `${who}邀请${list}加入群聊`;
+  main.appendChild(tip);
+  return;
+}
+
+// 过滤签名消息：不渲染成聊天气泡
+if (it.type === 'sig') {
+  // （状态栏已由 applySigStatus() 负责更新）
+  return;
+}
+
               const friendMap = this._friendMap || {};
               const makeAvatar = () => {
                 const a = document.createElement('div');
@@ -6313,7 +7676,51 @@ const setGenScope = async (v) => {
                 ico.appendChild(ii);
                 card.appendChild(info);
                 card.appendChild(ico);
+                card.setAttribute('data-fname', fname);
                 appendLR(card);
+                } else if (it.type === 'xfr' || it.type === 'xfr.rcv' || it.type === 'xfr.rfd') {
+  const sender = it.speaker || '';
+const party  = args[0] ?? '';   // xfr: 接收人；rcv/rfd: 转账方
+const amt    = args[1] ?? '';
+  let line2 = '';
+  let icon  = 'fi fi-tr-money-transfer-coin-arrow'; // 默认：转账
+  if (it.type === 'xfr')       line2 = `${sender}向${party}转账`;
+  if (it.type === 'xfr.rcv') { line2 = `${sender}接受${party}转账`; icon = 'fi fi-tr-check-circle'; }
+  if (it.type === 'xfr.rfd') { line2 = `${sender}退回${party}转账`; icon = 'fi fi-tr-refund-alt'; }
+
+  const card = document.createElement('div');
+  card.className = 'cv-xfr' + (it.type === 'xfr' ? ' is-pending' : '');
+  card.setAttribute('data-type', it.type);
+  card.setAttribute('data-sender', sender);
+  if (it.type === 'xfr') card.setAttribute('data-receiver', party); // 仅初始转账需要接收人判断
+  card.setAttribute('data-amount', amt);
+
+  card.innerHTML = `
+    <div class="xfr-top">
+      <div class="xfr-ico"><i class="${icon}"></i></div>
+      <div class="xfr-txt">
+        <div class="line1"><span class="yen">￥</span><span class="amt">${amt}</span></div>
+        <div class="line2">${line2}</div>
+      </div>
+    </div>
+    <div class="xfr-bottom">转账</div>
+  `;
+  appendLR(card);
+  } else if (it.type === 'loc') {
+  // args: [位置信息]
+  const loc = (it.args?.[0] ?? '').trim();
+  const card = document.createElement('div');
+  card.className = 'cv-loc';
+  card.innerHTML = `
+    <div class="cv-loc-head"></div>
+    <div class="cv-loc-map">
+      <img alt="map">
+      <i class="fi fi-sr-land-layer-location"></i>
+    </div>`;
+  card.querySelector('.cv-loc-head').textContent = loc || '未知位置';
+  card.querySelector('.cv-loc-map img').src =
+    'https://i.postimg.cc/RVJf4JdG/file-000000001b2c6230b4489d26bf06fdff.png';
+  appendLR(card);
               } else {
                 // txt / 其他：args[0] 作为文本
                 const bubble = document.createElement('div');
@@ -6331,9 +7738,11 @@ const setGenScope = async (v) => {
                 if (e.type === 'init') {
                   main.innerHTML = '';
                   e.items.forEach(renderOne);
+                  applySigStatus();
                   scrollToBottom();
                 } else if (e.type === 'append') {
                   e.items.forEach(renderOne);
+                  applySigStatus();
                   scrollToBottom();
                 }
               },
@@ -6430,10 +7839,10 @@ this._offHdrUnread = RMQQ.Data.subscribeUnreadOfLogin?.(
         </div>
         <div class="space-body">
           <div class="card">
-            <div class="muted">（占位）这里放空间动态入口/卡片…</div>
+            <div class="muted">（占位）…</div>
           </div>
           <div class="card">
-            <div class="muted">你可以后续把真实数据塞进来</div>
+            <div class="muted">等待开发中...</div>
           </div>
         </div>
       </div>
@@ -6514,6 +7923,11 @@ this._offHdrUnread = RMQQ.Data.subscribeUnreadOfLogin?.(
                 return `[语音 ${String(Array.isArray(it.args) ? it.args[0] || '' : '')}'' ]`.replace(" ''", "''");
               if (it.type === 'dmt') return '[多媒体] ' + String(a0 || '');
               if (it.type === 'file') return `[文件] ${String(a0 || '')}`.trim();
+              if (it.type === 'xfr')      return `[转账] ￥${String(it.args?.[1] || '')}`;
+if (it.type === 'xfr.rcv')  return `[已收款] ￥${String(it.args?.[1] || '')}`;
+if (it.type === 'xfr.rfd')  return `[已退回] ￥${String(it.args?.[1] || '')}`;
+if (it.type === 'loc')   return '[位置] ' + String(a0 || '');
+if (it.type === 'nudge') return '[拍一拍] ' + String(a0 || '');
             }
             return '';
           }
@@ -6552,11 +7966,6 @@ this._offHdrUnread = RMQQ.Data.subscribeUnreadOfLogin?.(
             const qq = getQQ();
             qq.accounts ||= [];
             qq.schemaVersion ||= 1;
-
-            // NEW: 如果完全没有账号，就创建一个默认账号 {{user}}
-            if (!Array.isArray(qq.accounts) || qq.accounts.length === 0) {
-              qq.accounts = [{ login: '{{user}}', sessions: [] }];
-            }
 
             // 防止出现空 login 的脏数据（可选但安全）
             qq.accounts = qq.accounts
@@ -6675,28 +8084,43 @@ this._offHdrUnread = RMQQ.Data.subscribeUnreadOfLogin?.(
               const acc = ensureAccount(login);
               const sess = ensureSession(acc, kind, peer);
               const add = Array.isArray(u.items) ? u.items : [];
-              for (const it of add) {
-                const item = {
-                  id: it.id || genId(),
-                  type: it.type || 'txt',
-                  speaker: it.speaker || (it.out ? login : peer || '对方'),
-                  out: !!it.out,
-                  args: Array.isArray(it.args) ? it.args.map(String) : [],
-                  content: Array.isArray(it.args) && it.args[0] != null ? String(it.args[0]) : '',
-                };
+let inc = 0; // 本次新增需要累加的未读数
 
-                (sess.items ||= []).push(item);
-                changed++;
-              }
-              emit('session:changed', {
-                login,
-                kind,
-                peer,
-                change: { type: 'append', count: add.length, last: sess.items[sess.items.length - 1] || null },
-                preview: lastPreview(sess),
-                unreadCount: Number(sess.unreadCount) || 0,
-                lastTs: sess.items.length ? sess.items[sess.items.length - 1].ts : now(),
-              });
+for (const it of add) {
+  const item = {
+    id: it.id || genId(),
+    type: it.type || 'txt',
+    speaker: it.speaker || (it.out ? login : peer || '对方'),
+    out: !!it.out,
+    args: Array.isArray(it.args) ? it.args.map(String) : [],
+    content: Array.isArray(it.args) && it.args[0] != null ? String(it.args[0]) : '',
+  };
+
+  // ☆ 补上未读逻辑：对方发来的、且不是当前打开的会话 => 记未读
+  if (item.out === false) {
+    const isActive = !!(activeChat &&
+      activeChat.login === login &&
+      activeChat.kind === kind &&
+      activeChat.peer === peer);
+    if (!isActive) inc++;
+  }
+
+  (sess.items ||= []).push(item);
+  changed++;
+}
+
+// ☆ 把本次累计的未读一次性加回去
+if (inc > 0) {
+  sess.unreadCount = (Number(sess.unreadCount) || 0) + inc;
+}
+
+emit('session:changed', {
+  login, kind, peer,
+  change: { type: 'append', count: add.length, last: sess.items[sess.items.length - 1] || null },
+  preview: lastPreview(sess),
+  unreadCount: Number(sess.unreadCount) || 0, // 这里会带上最新的未读
+  lastTs: sess.items.length ? sess.items[sess.items.length - 1].ts : now(),
+});
             }
             if (changed) _autoPersistTick();
             return changed;
@@ -6999,7 +8423,95 @@ subscribeAnyUnreadExceptLogin,
           };
         })();
 
-        return { ScreenManager, TabsView, ChatView, SpaceView, Data };
+        // ==== 全局：额外查看的会话集合（跨聊天/跨账号/可多选） ====
+const Extra = (() => {
+  const sel = new Set(); // key: `${login}|${kind}|${peer}`
+
+  const makeKey = (login, kind, peer) => `${String(login)}|${String(kind)}|${String(peer)}`;
+
+  return {
+    add(login, kind, peer)   { sel.add(makeKey(login, kind, peer)); },
+    remove(login, kind, peer){ sel.delete(makeKey(login, kind, peer)); },
+    has(login, kind, peer)   { return sel.has(makeKey(login, kind, peer)); },
+    clear()                  { sel.clear(); },
+    list() {
+      return Array.from(sel).map(key => {
+        const [login, kind, peer] = key.split('|');
+        return { login, kind, peer };
+      });
+    },
+  };
+})();
+
+class LoginView {
+  constructor({ onConfirm } = {}) {
+    this.key = 'login';
+    this.keepAlive = false;
+    this.onConfirm = onConfirm;
+    this.root = null;
+    this._onOK = null;
+  }
+  mount(container) {
+    this.root = container;
+    this.root.innerHTML = `
+      <style>
+        :host{display:block;height:100%}
+        .login-wrap{position:absolute;inset:0;background:#fff url('https://i.postimg.cc/DyrGtSqR/2493163365.jpg') center/cover no-repeat;color:#111;
+
+          font:14px/1.4 system-ui;display:grid;place-items:center}
+         .card{
+  width:86%;max-width:360px;border-radius:16px;
+  padding:16px 14px;box-shadow:none;                /* ← 阴影去掉 */
+  background:rgba(255,255,255,.18);                 /* 0.18 更柔和 */
+  backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.65);
+  position:relative; overflow:hidden
+}
+        /* 预留背景位：可通过 JS/CSS 给它设置背景图 */
+        .loginviewbg{position:absolute;inset:0;opacity:1;z-index:0;background:linear-gradient(0deg,rgba(0,0,0,.25),rgba(0,0,0,.25)),url('https://i.postimg.cc/DyrGtSqR/2493163365.jpg') center/cover no-repeat;pointer-events:none}
+        .card > *:not(.loginviewbg){ position:relative; z-index:1; }
+        .title{font-size:22px;margin-bottom:12px;color:#000;font-weight:700}
+.card .title{color:#000;text-shadow:none}
+        .lbl{font-size:12px;color:#f1f5f9}
+        .row{display:flex;flex-direction:column;gap:10px}
+        .ipt{flex:1;height:36px;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;font-size:14px;background:#fff;color:#111;outline:none}
+        .btn{border:0;border-radius:10px;padding:10px 14px;background:#2b84ff;color:#fff;cursor:pointer;width:100%}
+        .err{color:#ef4444;font-size:12px;margin-top:8px;min-height:1em}
+      </style>
+      <div class="login-wrap" role="form" aria-label="QQ 登录">
+        <div class="card">
+          <div class="loginviewbg" id="loginviewbg"></div>
+          <div class="title">请输入用户名</div>
+          <div class="row">
+            <input id="loginName" class="ipt" placeholder="请输入用户名" autocomplete="off" />
+            <button id="loginOK" class="btn" aria-label="确认登录">确认登录</button>
+          </div>
+          <div id="loginErr" class="err"></div>
+        </div>
+      </div>
+    `;
+    const ipt = this.root.querySelector('#loginName');
+    const ok  = this.root.querySelector('#loginOK');
+    const err = this.root.querySelector('#loginErr');
+    this._onOK = async () => {
+      const name = (ipt.value || '').trim();
+      if (!name) { err.textContent = '请先输入用户名'; return; }
+      try { this.onConfirm?.(name); } catch {}
+    };
+    ok?.addEventListener('click', this._onOK);
+    ipt?.addEventListener('keydown', e => { if (e.key === 'Enter') this._onOK(); });
+    ipt?.focus();
+  }
+  unmount() {
+    const ok = this.root?.querySelector('#loginOK');
+    if (ok && this._onOK) ok.removeEventListener('click', this._onOK);
+    this._onOK = null;
+    this.root = null;
+  }
+}
+
+
+        return { ScreenManager, TabsView, ChatView, SpaceView, LoginView, Data, Extra };
       })();
 
       // ====================== QQ App（使用封包） ======================
@@ -7028,13 +8540,17 @@ subscribeAnyUnreadExceptLogin,
           }
         }
 
-        // --- 1. 将 mount 方法声明为 async ---
-        async mount(viewport) { 
-          super.mount(viewport);
+        async mount(viewport) {
+  super.mount(viewport);
 
-          this.shadow.innerHTML = `
+  this.shadow.innerHTML = `
       <style>
         :host{ display:block; height:100%; }
+        :host, :host * {
+  font-family: var(--rmphone-font-family, Inter), system-ui, -apple-system, "Segoe UI", Arial;
+  font-feature-settings: var(--rmphone-font-feature, "hwid");
+}
+
         .qq-router{ position:absolute; inset:0; border-radius:inherit; overflow:hidden; background:transparent; }
         .qq-screen{
           position:absolute; inset:0; border-radius:inherit; overflow:hidden;
@@ -7052,29 +8568,117 @@ subscribeAnyUnreadExceptLogin,
       <div id="router" class="qq-router" aria-label="QQ Router"></div>
     `;
 
-
-
-          // --- 2. 在所有逻辑之前，先等待数据模块初始化完成 ---
-          await RMPhoneToChatMessage.initialize();
+     // 先等数据桥初始化；失败也不中断启动
+  try {
+    await RMPhoneToChatMessage.initialize(); // 只读“最新一条”
+  } catch (e) {
+    console.warn('QQ.mount: 初始化失败，将以空数据启动。', e);
+  }
 
           const router = this.shadow.querySelector('#router');
 
-          RMQQ.Data.init?.();
-          RMQQ.Data.setPersistMode({ mode: 'immediate' });
+          // 初始化数据（不再自动造 {{user}}）
+RMQQ.Data.init?.();
+RMQQ.Data.setPersistMode({ mode: 'immediate' });
 
-          this._manager = new RMQQ.ScreenManager(router);
+// 屏幕管理器
+this._manager = new RMQQ.ScreenManager(router);
 
-          this._login = this._detectLogin();
+// 先尝试从数据里探测已有登录
+this._login = this._detectLogin();
 
-          const tabs = new RMQQ.TabsView({
-            login: this._login,
-            onOpenChat: info => this.openChat(info),
-            onOpenSpace: () => this.openSpace(),
-            onLoginChanged: login => {
-              this._login = login;
-            },
-          });
-          this._manager.push(tabs);
+// 依据“世界书 + _data”是否有登录来决定首屏
+(async () => {
+  let wbHasLogin = false;
+  try {
+    const wbQQ = await RMPhoneToWorldBook.getApp('qq').catch(() => ({}));
+    wbHasLogin = !!Object.keys((wbQQ && wbQQ.login) || {}).length;
+  } catch {}
+
+  const dataHasLogin = !!this._login;
+
+  if (!wbHasLogin && !dataHasLogin) {
+    // 没有任何登录 → 先显示登录页
+    const login = new RMQQ.LoginView({
+      onConfirm: async (name) => {
+        // 1) 在 _data 里创建账号
+        RMQQ.Data.ensureAccount?.(name);
+        await RMQQ.Data.commit?.();
+
+        // 2) 切到 Tabs
+        this._login = name;
+        this._manager.destroy();
+        const tabs = new RMQQ.TabsView({
+          login: this._login,
+          onOpenChat: info => this.openChat(info),
+          onOpenSpace: () => this.openSpace(),
+          onLoginChanged: (login) => {
+  this._login = login;
+  if (!login) {
+    // 没有任何账号了 → 直接切回登录页
+    this._manager.destroy();
+    const loginView = new RMQQ.LoginView({
+      onConfirm: async (name) => {
+        // 新账号写入数据，然后进 Tabs
+        RMQQ.Data.ensureAccount?.(name);
+        await RMQQ.Data.commit?.();
+        this._login = name;
+        this._manager.destroy();
+        const tabs2 = new RMQQ.TabsView({
+          login: this._login,
+          onOpenChat: info => this.openChat(info),
+          onOpenSpace: () => this.openSpace(),
+          onLoginChanged: (ln) => { this._login = ln; }, // 保持原样即可
+        });
+        this._manager.push(tabs2);
+      }
+    });
+    this._manager.push(loginView);
+  }
+},
+
+        });
+        this._manager.push(tabs); // root，不右进
+      }
+    });
+    this._manager.push(login);   // root，不右进
+    return;
+  }
+
+  // 已有登录 → 直接进 Tabs
+  const tabs = new RMQQ.TabsView({
+    login: this._login,
+    onOpenChat: info => this.openChat(info),
+    onOpenSpace: () => this.openSpace(),
+    onLoginChanged: (login) => {
+  this._login = login;
+  if (!login) {
+    // 没有任何账号了 → 直接切回登录页
+    this._manager.destroy();
+    const loginView = new RMQQ.LoginView({
+      onConfirm: async (name) => {
+        // 新账号写入数据，然后进 Tabs
+        RMQQ.Data.ensureAccount?.(name);
+        await RMQQ.Data.commit?.();
+        this._login = name;
+        this._manager.destroy();
+        const tabs2 = new RMQQ.TabsView({
+          login: this._login,
+          onOpenChat: info => this.openChat(info),
+          onOpenSpace: () => this.openSpace(),
+          onLoginChanged: (ln) => { this._login = ln; }, // 保持原样即可
+        });
+        this._manager.push(tabs2);
+      }
+    });
+    this._manager.push(loginView);
+  }
+},
+
+  });
+  this._manager.push(tabs);
+})();
+
         }
 
         unmount() {
@@ -7206,4 +8810,8 @@ subscribeAnyUnreadExceptLogin,
         youtube: el => new RMPhone.Apps.YouTube(el),
         discord: el => new RMPhone.Apps.Discord(el),
       };
+
+      
     </script>
+
+
